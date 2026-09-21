@@ -104,6 +104,19 @@ int moz_export_bytes_ex(const moz_geom *g, const char *format, const moz_export_
  */
 int moz_geom_face_colors(const moz_geom *g, unsigned char **out, size_t *out_len, char **err);
 
+/* 同上，但先切到指定配色方案（colorscheme 为 NULL/"" 时等价 moz_geom_face_colors）。
+   未着色的对象取该配色的材质色，因此这条路径能让调用方按配色取逐面颜色。 */
+int moz_geom_face_colors_ex(const moz_geom *g, const char *colorscheme,
+                            unsigned char **out, size_t *out_len, char **err);
+
+/* --- 三角化网格 ---
+ * 直接给出三角面顶点，省去调用方解析 STL 字节。
+ * *out 为 malloc 缓冲（moz_bytes_free 释放），每 9 个 float 一个三角面（3 个顶点，
+ * 世界坐标，float32，与 binstl 同精度），*count 为三角面数。顺序与
+ * moz_export_bytes(g, "binstl") 及 moz_geom_face_colors 完全一致。
+ */
+int moz_geom_triangles(const moz_geom *g, float **out, size_t *count, char **err);
+
 /* --- 渲染选项 --- */
 enum moz_render_mode {
   MOZ_RENDER_OPENCSG = 0,        /* 默认：preview 路径，保留 color()（等同 GUI F5） */

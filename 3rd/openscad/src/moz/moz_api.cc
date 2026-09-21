@@ -1350,6 +1350,60 @@ extern "C" int moz_geom_face_colors(const moz_geom *g, unsigned char **out, size
   return 0;
 }
 
+extern "C" int moz_geom_face_colors_ex(const moz_geom *g, const char *colorscheme,
+                                       unsigned char **out, size_t *out_len, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  {
+    /* 先切配色：未着色对象取的是当前配色的材质色，所以必须在算颜色之前应用。
+       用 log scope 捕获 moz_apply_colorscheme 的「未知配色」警告并并进 g->log。 */
+    std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+    moz_log_scope scope;
+    moz_ensure_init();
+    moz_apply_colorscheme(colorscheme);
+    g->log += scope.log;
+  }
+  /* 复用主实现（递归锁可重入；日志也会并进 g->log） */
+  return moz_geom_face_colors(g, out, out_len, err);
+}
+
+extern "C" int moz_geom_triangles(const moz_geom *g, float **out, size_t *count, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  if (!out || !count) {
+    moz_set_err(err, "null out/count");
+    return -7;
+  }
+  *out = nullptr;
+  *count = 0;
+
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_log_scope scope;
+
+  std::vector<std::array<Vector3d, 3>> tris;
+  moz_collect_triangles(g->geom, tris);
+
+  /* tris.size() 可能为 0（2D 或空几何）：malloc 0 的行为依实现而定，多留 1 字节 */
+  auto *buf = static_cast<float *>(malloc(tris.size() * 9 * sizeof(float) + 1));
+  for (size_t i = 0; i < tris.size(); ++i) {
+    for (int v = 0; v < 3; ++v) {
+      for (int c = 0; c < 3; ++c) {
+        buf[i * 9 + v * 3 + c] = static_cast<float>(tris[i][v][c]);
+      }
+    }
+  }
+  *out = buf;
+  *count = tris.size();
+  g->log += scope.log;
+  return 0;
+}
+
 /* ---------------- 文本 dump ---------------- */
 
 /* 文本 dump：csg / ast / term / echo（不需要几何求值） */

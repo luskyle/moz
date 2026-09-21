@@ -43,6 +43,7 @@
 子对象列表中后面的兄弟对象**；只影响单个对象时请优先用具名参数（``sphere(r=1, fn=40)``）。
 """
 
+import array
 import ctypes as C
 import math
 import os
@@ -116,6 +117,9 @@ class Shape:
     def __init__(self, source, **variables):
         self.source = source.strip().rstrip(";")
         self.variables = dict(variables)
+        # 惰性求值缓存：(variables 快照, Geometry)。同一个 Shape 反复访问
+        # .measure/.export()/.face_colors() 只求值一次；variables 变了自动失效。
+        self._geometry_cache = None
 
     def _source_for_eval(self):
         text = self.source.strip()
@@ -128,7 +132,13 @@ class Shape:
         return text + ";"
 
     def _geometry(self):
-        return eval_text(self._source_for_eval(), **self.variables)
+        key = tuple(self.variables.items())
+        cache = self._geometry_cache
+        if cache is not None and cache[0] == key and not cache[1]._closed:
+            return cache[1]
+        geometry = eval_text(self._source_for_eval(), **self.variables)
+        self._geometry_cache = (key, geometry)
+        return geometry
 
     def union(self, *others):
         return _compose("union", self, *others)
@@ -179,8 +189,11 @@ class Shape:
     def render_png_bytes(self, width=0, height=0, **options):
         return self._geometry().render_png_bytes(width, height, **options)
 
-    def face_colors(self):
-        return self._geometry().face_colors()
+    def face_colors(self, colorscheme=None):
+        return self._geometry().face_colors(colorscheme)
+
+    def triangles(self):
+        return self._geometry().triangles()
 
     def show(self, title="moz OpenSCAD", width=900, height=650):
         from moz_viewer import show_shape
@@ -681,6 +694,12 @@ class Part:
     def measure(self):
         return self.shape.measure
 
+    def face_colors(self, colorscheme=None):
+        return self.shape.face_colors(colorscheme)
+
+    def triangles(self):
+        return self.shape.triangles()
+
     def render_png(self, path, width=0, height=0, **options):
         return self.shape.render_png(path, width, height, **options)
 
@@ -824,6 +843,10 @@ def _load():
     lib.moz_export_bytes.argtypes = [C.c_void_p, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p]
     lib.moz_geom_face_colors.restype = C.c_int
     lib.moz_geom_face_colors.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]
+    lib.moz_geom_face_colors_ex.restype = C.c_int
+    lib.moz_geom_face_colors_ex.argtypes = [C.c_void_p, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p]
+    lib.moz_geom_triangles.restype = C.c_int
+    lib.moz_geom_triangles.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]
 
     lib.moz_render_options_default.restype = None
     lib.moz_render_options_default.argtypes = [C.c_void_p]
@@ -1066,8 +1089,8 @@ def eval_animation(source, frames, fps=1.0, *, callback, path=None, **variables)
 
     每帧把 ``$t = frame / fps`` 传给模型（等价 ``-D "$t=..."``），求值后调用
     ``callback(frame, geometry)``。**geometry 只在本次回调期间有效**：回调返回后引擎
-    立即释放它，之后再访问会抛 ``OpenSCADError``。callback 返回非 0 时提前中止。
-    返回已完成的帧数。
+    立即释放它，之后再访问会抛 ``OpenSCADError``。callback 返回**整数**非 0 时提前中止
+    （其它返回值忽略）。返回已完成的帧数。
 
     给了 ``path`` 时按文件求值（相对路径按文档目录解析），否则把 ``source`` 当源码。
     ``variables`` 为 ``-D`` 参数；``$t`` 由本函数逐帧注入，不要在 variables 里再给。
@@ -1091,7 +1114,9 @@ def eval_animation(source, frames, fps=1.0, *, callback, path=None, **variables)
             return 1
         finally:
             geometry._closed = True  # 句柄即将被引擎释放，禁止回调之后再用
-        return 0 if result is None else int(result)
+        # 只有整数被当作中止码（非 0 中止）；其它返回值一律忽略，
+        # 否则回调里顺手 return 个对象会变成 ctypes 回调里的 TypeError 并被静默吞掉。
+        return int(result) if isinstance(result, int) else 0
 
     cb = C.cast(_FrameCallback(_trampoline), C.c_void_p)
     if path is not None:
@@ -1334,23 +1359,51 @@ class Geometry:
         finally:
             lib.moz_bytes_free(buf)
 
-    def face_colors(self):
-        """逐面颜色：4 字节/面（RGBA），与 export_bytes("binstl") 的三角面一一对应。
+    def face_colors(self, colorscheme=None):
+        """逐面颜色：4 字节/面（RGBA），与 export_bytes("binstl") / triangles() 的三角面一一对应。
 
-        颜色来自 color()；未着色对象取当前配色方案的材质色。预览器用它给网格上色。
+        颜色来自 color()；未着色对象取配色方案的材质色。预览器用它给网格上色。
+        colorscheme 指定配色（如 "Tomorrow"），不传/None 时用当前配色。
         """
         self._check()
         lib = _load()
         err = _as_err()
         buf = C.c_void_p()
         length = C.c_size_t()
-        rc = lib.moz_geom_face_colors(self._handle, C.byref(buf), C.byref(length), C.byref(err))
+        if colorscheme:
+            rc = lib.moz_geom_face_colors_ex(self._handle, colorscheme.encode(),
+                                             C.byref(buf), C.byref(length), C.byref(err))
+        else:
+            rc = lib.moz_geom_face_colors(self._handle, C.byref(buf), C.byref(length), C.byref(err))
         if rc != 0:
             raise OpenSCADError(_err_msg(err) or f"face color export failed ({rc})")
         try:
             return C.string_at(buf.value, length.value) if length.value else b""
         finally:
             lib.moz_bytes_free(buf)
+
+    def triangles(self):
+        """三角化网格：``array('f')``，每 9 个 float 一个三角面（3 个顶点，世界坐标）。
+
+        顺序与 ``export_bytes("binstl")`` 和 ``face_colors()`` 完全一致；用它可省去解析 STL 字节，
+        例如 ``np.frombuffer(g.triangles(), dtype=np.float32).reshape(-1, 3)``。
+        2D 几何返回空数组。
+        """
+        self._check()
+        lib = _load()
+        err = _as_err()
+        buf = C.c_void_p()
+        count = C.c_size_t()
+        rc = lib.moz_geom_triangles(self._handle, C.byref(buf), C.byref(count), C.byref(err))
+        if rc != 0:
+            raise OpenSCADError(_err_msg(err) or f"triangle export failed ({rc})")
+        try:
+            data = C.string_at(buf.value, count.value * 9 * 4) if count.value else b""
+        finally:
+            lib.moz_bytes_free(buf)
+        values = array.array("f")
+        values.frombytes(data)
+        return values
 
     def render_png(self, path, width=0, height=0, **options):
         """渲染 PNG 到文件。width/height 为 0 时用库默认尺寸（RenderSettings，512x512）。

@@ -4,7 +4,6 @@
 import argparse
 import importlib.util
 import os
-import struct
 import sys
 from pathlib import Path
 
@@ -24,56 +23,39 @@ from PySide6.QtWidgets import (
 _DEFAULT_COLOR = np.asarray([0.20, 0.62, 0.90], dtype=np.float32)
 
 
-def _stl_vertices(data, face_colors=None):
-    """binstl → (顶点, 面法线, 逐顶点颜色)，**不做**居中/归一化。
-
-    face_colors 是 moz_geom_face_colors 的输出（4 字节/面，顺序与 STL 三角面一一对应）；
-    同一三角面的三个顶点取同一个颜色。没有颜色信息时颜色返回 None。
-    居中/缩放交给调用方（动画各帧必须用**同一套** center/radius，否则会逐帧抖动）。
-    """
-    if len(data) < 84:
-        raise ValueError("invalid STL data")
-    count = struct.unpack_from("<I", data, 80)[0]
-    if len(data) < 84 + count * 50:
-        raise ValueError("truncated STL data")
-    vertices = []
-    normals = []
-    offset = 84
-    for _ in range(count):
-        values = struct.unpack_from("<12f", data, offset)
-        normal = values[0:3]
-        vertices.extend((values[3:6], values[6:9], values[9:12]))
-        normals.extend((normal, normal, normal))
-        offset += 50
-    points = np.asarray(vertices, dtype=np.float32).reshape(-1, 3)
-    face_normals = np.asarray(normals, dtype=np.float32).reshape(-1, 3)
-    if len(face_normals):
-        face_normals /= np.maximum(np.linalg.norm(face_normals, axis=1, keepdims=True), 1e-8)
-
-    colors = None
-    if face_colors is not None and len(face_colors) == count * 4:
-        per_vertex = []
-        for index in range(count):
-            rgb = [face_colors[index * 4 + channel] / 255.0 for channel in range(3)]
-            per_vertex.extend((rgb, rgb, rgb))
-        colors = np.asarray(per_vertex, dtype=np.float32).reshape(-1, 3)
-    return points, face_normals, colors
-
-
-def _face_colors(shape):
-    """取逐面颜色；旧版库或非 3D 几何拿不到时返回 None（预览器退回默认色）。"""
+def _face_colors(shape, colorscheme=None):
+    """取逐面颜色；旧版库、非 3D 几何拿不到时返回 None（预览器退回默认色）。"""
     try:
-        return shape.face_colors()
+        return shape.face_colors(colorscheme)
     except Exception:
         return None
 
 
-def _mesh_from_shape(shape):
-    """Shape → {points, normals, colors}（世界坐标，未居中）。缺颜色时填默认材质色。"""
-    points, normals, colors = _stl_vertices(shape.export_bytes("binstl"), _face_colors(shape))
-    if colors is None:
-        colors = np.tile(_DEFAULT_COLOR, (len(points), 1))
-    return {"points": points, "normals": normals, "colors": colors}
+def _mesh_from_shape(shape, colorscheme=None):
+    """Shape → {points, normals, colors}（世界坐标，未居中）。
+
+    用 ``Geometry.triangles()`` 直取三角面（不再解析 STL 字节），法线由叉积算出。
+    ``Shape`` 有惰性求值缓存，所以 ``triangles()`` 与 ``face_colors()`` 只求值一次。
+    """
+    triangles = shape.triangles()
+    if not len(triangles):
+        empty = np.zeros((0, 3), dtype=np.float32)
+        return {"points": empty, "normals": empty, "colors": empty}
+
+    points = np.frombuffer(triangles, dtype=np.float32).reshape(-1, 3)
+    tri = points.reshape(-1, 3, 3)
+    face_normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    face_normals /= np.maximum(np.linalg.norm(face_normals, axis=1, keepdims=True), 1e-8)
+    normals = np.repeat(face_normals, 3, axis=0).astype(np.float32)
+
+    n_triangles = len(tri)
+    colors = _face_colors(shape, colorscheme)
+    if colors is not None and len(colors) == n_triangles * 4:
+        rgb = np.frombuffer(colors, dtype=np.uint8).reshape(-1, 4)[:, :3].astype(np.float32) / 255.0
+        per_vertex = np.repeat(rgb, 3, axis=0)
+    else:
+        per_vertex = np.tile(_DEFAULT_COLOR, (n_triangles * 3, 1))
+    return {"points": points, "normals": normals, "colors": per_vertex}
 
 
 class Interactive3D(QOpenGLWidget):
