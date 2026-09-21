@@ -142,10 +142,20 @@ g.render_png_bytes(800, 600, renderer="cgal")             # 上游 --render=cgal
 g.render_png_bytes(800, 600, colorscheme="Starnight")     # 配色方案（来自 color-schemes/*.json）
 g.render_png_bytes(800, 600, edges=True, axes=True)       # 显示边 / 坐标轴
 g.render_png("out.png", 0, 0)                             # 宽高给 0 = 用库默认（512×512）
+g.render_png_bytes(800, 600, vpr=[55, 0, 25], vpt=[0, 0, 0], vpd=200)   # 相机覆盖
+g.render_png_bytes(800, 600, projection="ortho")          # 正交投影
 ```
 
 可选项（`_render_options`）：`renderer`（`"opencsg"` / `"throwntogether"` / `"cgal"`）、
-`colorscheme`、`faces`、`edges`、`axes`、`scales`、`crosshairs`。
+`colorscheme`、`faces`、`edges`、`axes`、`scales`、`crosshairs`、`vpr`/`vpt`/`vpd`/`vpf`、
+`projection`（`"perspective"` 默认 / `"ortho"`）。
+
+**相机覆盖**：给了 `vpr`/`vpt`/`vpd`/`vpf` 任意一个就忽略模型里的 `$vp*`、也不自动取景，
+此时**必须给 `vpd`**（相机距离，模型单位）；`vpr` 是旋转角（度）、`vpt` 是目标点、
+`vpf` 是视场角（度）。`projection` 可单独给（不触发相机覆盖）。
+
+⚠️ `colorscheme` 切换的是**全局**配色（对应上游 `set_render_color_scheme`），会影响后续的
+渲染/`face_colors()` 调用——需要多套配色并存时，自己记下并在用完切回。
 
 模型里的 `$vpr` / `$vpt` / `$vpd` / `$vpf` 会影响相机（例如 `Basics/logo_and_text.scad`
 用它固定视角）；我们复刻时可以直接写进源码：

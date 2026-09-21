@@ -53,7 +53,7 @@
 ## 几个关键设计决定
 
 - **用 C ABI + ctypes，而不是 pybind11/CPython 扩展**：绑定层零编译依赖，Python 代码可读可改；
-  跨语言边界只有 20 个函数，语义边界清晰（错误统一走 `err` 字符串）。
+  跨语言边界只有 22 个函数，语义边界清晰（错误统一走 `err` 字符串）。
 - **Python 不做几何运算**：SCAD 的求值语义（$fn/$fa/$fs、布尔顺序、Nef 结构）很难在 Python 里复刻一致。
   让引擎算，是本项目能让「Python 版与原生 .scad 结果一致」的前提（见 [verification.md](verification.md)）。
 - **共享库而不是可执行文件**：headless 目标（`HEADLESS=ON` + `OPENSCAD_NOGUI`）把 GUI/Qt 依赖摘掉，

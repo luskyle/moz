@@ -183,6 +183,8 @@ enum moz_render_mode {
   MOZ_RENDER_CGAL = 2            /* 上游 --render=cgal：几何渲染，无 color() */
 };
 
+enum moz_projection { MOZ_PROJECTION_PERSPECTIVE = 0, MOZ_PROJECTION_ORTHOGONAL = 1 };
+
 typedef struct moz_render_options {
   unsigned int width;        /* 0 -> RenderSettings::img_width（默认 512） */
   unsigned int height;       /* 0 -> RenderSettings::img_height（默认 512） */
@@ -193,6 +195,14 @@ typedef struct moz_render_options {
   int show_scales;
   int show_crosshairs;
   const char *colorscheme;   /* NULL / "" = 沿用当前配色方案 */
+
+  /* 相机覆盖：has_camera 非 0 时忽略模型里的 $vp* 且不自动取景 */
+  int has_camera;
+  double vpr[3];             /* 旋转角（度） */
+  double vpt[3];             /* 目标点 */
+  double vpd;                /* 相机距离 */
+  double vpf;                /* 视场角（度，<=0 表示不改） */
+  int projection;            /* 见 enum moz_projection；独立于 has_camera */
 } moz_render_options;
 
 void moz_render_options_default(moz_render_options *opts);
@@ -209,8 +219,13 @@ int moz_render_png_bytes(const moz_geom *g, const moz_render_options *opts,
   因此 `%` 背景对象、`#` 高亮、`render()` 的预览语义都与 F6 不同。
 - `colorscheme` 取值来自 `<资源目录>/color-schemes/render/*.json` 里的名字
   （如 `Cornfield`、`Tomorrow`、`Starnight`）；找不到时记一条警告并沿用当前配色。
-  资源目录的定位见 [build.md](build.md)。
+  资源目录的定位见 [build.md](build.md)。切换的是**全局**配色（上游 `set_render_color_scheme`
+  语义），会影响之后所有渲染/`moz_geom_face_colors*` 的材质色。
 - `show_*` 为假时对应上游 `ViewOptions` 的同名开关；`show_faces=0` 等价上游的 `wireframe`。
+
+**相机覆盖**：`has_camera != 0` 时不再读模型里的 `$vp*`、也不做 `viewall + autocenter`，
+改用 `vpr/vpt/vpd/vpf`（等价上游 `Camera::setVpr/setVpt/setVpd/setVpf`）——这样「导出 PNG」的
+视角由调用方决定，而不是被模型里的相机设置绑死。`projection` 独立生效（默认透视）。
 
 ## 文本 dump
 

@@ -33,11 +33,14 @@
 
 ## 3. 新 API（延续 C ABI 补全）
 
-- [ ] 相机结构（视角 / 正交 / 取景 bbox），让「导出 PNG」与窗口视角一致（现在只能靠模型里的 `$vpr`）。
+- [x] 相机覆盖：`moz_render_options` 增加 `has_camera`/`vpr`/`vpt`/`vpd`/`vpf`/`projection`，
+      渲染不再只能靠模型里的 `$vpr`（Python：`render_png(..., vpr=..., vpd=..., projection="ortho")`）。
+- [ ] viewer 把当前视角同步给引擎再导出 PNG。预览器用的是 **Y-up** 且把网格归一化到单位半径，
+      要像素级对齐需处理 Y-up/Z-up 与尺度映射（相机覆盖本身已完成，剩的是这层映射）。
 - [ ] 几何查询扩展：惯性矩、凸包、点包含（point-in-solid）、最近点/距离、截面 slice。
-- [ ] `resize()` 封装（零 C++ 改动）+ 修饰符助手 `background/debug/only/disable`（`%`/`#`/`!`/`*`）。
+- [x] `resize()` 封装（零 C++ 改动）+ 修饰符助手 `background`/`highlight`/`only`/`disable`（`%`/`#`/`!`/`*`）。
 - [ ] 2D 交互：viewer 的 2D 目前只是静态 SVG，无缩放/平移/尺寸标注。
-- [ ] **类型存根 `moz_openscad.pyi`**（对应 `__init__.pyi`）：显著改善 IDE 体验。
+- [x] **类型存根 `moz_openscad.pyi`**（对应 `__init__.pyi`）；`mypy` 校验通过。
 
 ## 4. viewer 增强
 
