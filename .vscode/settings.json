@@ -1,3 +1,5 @@
 {
-    "cmake.sourceDirectory": "/media/luskyle/DATA/project/moz/3rd/openscad"
+    "cmake.sourceDirectory": "/media/luskyle/DATA/project/moz/3rd/openscad",
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }

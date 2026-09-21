@@ -19,7 +19,12 @@ from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QStatusBar
 
 
-def _stl_vertices(data):
+def _stl_vertices(data, face_colors=None):
+    """binstl → 归一化顶点 / 法线 / 逐顶点颜色。
+
+    face_colors 是 moz_geom_face_colors 的输出（4 字节/面，顺序与 STL 三角面一一对应）；
+    同一三角面的三个顶点取同一个颜色。没有颜色信息时返回 None。
+    """
     if len(data) < 84:
         raise ValueError("invalid STL data")
     count = struct.unpack_from("<I", data, 80)[0]
@@ -37,16 +42,39 @@ def _stl_vertices(data):
     points = np.asarray(vertices, dtype=np.float32)
     face_normals = np.asarray(normals, dtype=np.float32)
     face_normals /= np.maximum(np.linalg.norm(face_normals, axis=1, keepdims=True), 1e-8)
+
+    colors = None
+    if face_colors is not None and len(face_colors) == count * 4:
+        per_vertex = []
+        for index in range(count):
+            rgb = [face_colors[index * 4 + channel] / 255.0 for channel in range(3)]
+            per_vertex.extend((rgb, rgb, rgb))
+        colors = np.asarray(per_vertex, dtype=np.float32)
+
     minimum, maximum = points.min(axis=0), points.max(axis=0)
     center = (minimum + maximum) / 2
     radius = max(float(np.max(maximum - minimum)) / 2, 1e-3)
-    return (points - center) / radius, face_normals
+    return (points - center) / radius, face_normals, colors
+
+
+def _face_colors(shape):
+    """取逐面颜色；旧版库或非 3D 几何拿不到时返回 None（预览器退回默认色）。"""
+    try:
+        return shape.face_colors()
+    except Exception:
+        return None
 
 
 class Interactive3D(QOpenGLWidget):
     def __init__(self, shape, parent=None):
         super().__init__(parent)
-        self.points, self.normals = _stl_vertices(shape.export_bytes("binstl"))
+        stl = shape.export_bytes("binstl")
+        self.points, self.normals, colors = _stl_vertices(stl, _face_colors(shape))
+        if colors is None:
+            # 拿不到逐面颜色时用默认材质色（与 OpenSCAD 默认配色同色系）
+            colors = np.tile(np.asarray([0.20, 0.62, 0.90], dtype=np.float32),
+                             (len(self.points), 1))
+        self.colors = colors
         self.program = None
         self.gl = None
         self.vertex_buffer = None
@@ -66,20 +94,24 @@ class Interactive3D(QOpenGLWidget):
         vertex_shader = """
             attribute vec3 position;
             attribute vec3 normal;
+            attribute vec3 color;
             uniform mat4 mvp;
             uniform mat4 modelView;
             varying vec3 viewNormal;
             varying vec3 viewPosition;
+            varying vec3 vertexColor;
             void main() {
                 vec4 positionInView = modelView * vec4(position, 1.0);
                 viewPosition = positionInView.xyz;
                 viewNormal = normalize((modelView * vec4(normal, 0.0)).xyz);
+                vertexColor = color;
                 gl_Position = mvp * vec4(position, 1.0);
             }
         """
         fragment_shader = """
             varying vec3 viewNormal;
             varying vec3 viewPosition;
+            varying vec3 vertexColor;
             void main() {
                 vec3 surfaceNormal = normalize(viewNormal);
                 vec3 lightDirection = normalize(vec3(-0.45, 0.75, 1.0));
@@ -87,7 +119,7 @@ class Interactive3D(QOpenGLWidget):
                 float diffuse = max(dot(surfaceNormal, lightDirection), 0.0);
                 float rim = pow(1.0 - max(dot(surfaceNormal, viewDirection), 0.0), 2.0);
                 float specular = pow(max(dot(reflect(-lightDirection, surfaceNormal), viewDirection), 0.0), 32.0);
-                vec3 baseColor = vec3(0.20, 0.62, 0.90);
+                vec3 baseColor = vertexColor;
                 vec3 color = baseColor * (0.20 + 0.72 * diffuse + 0.16 * rim) + vec3(0.55) * specular;
                 gl_FragColor = vec4(color, 1.0);
             }
@@ -104,13 +136,16 @@ class Interactive3D(QOpenGLWidget):
         self.vertex_buffer = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
         self.vertex_buffer.create()
         self.vertex_buffer.bind()
-        interleaved = np.hstack((self.points, self.normals)).astype(np.float32)
+        interleaved = np.hstack((self.points, self.normals, self.colors)).astype(np.float32)
         self.vertex_buffer.allocate(interleaved.tobytes(), interleaved.nbytes)
         self.program.bind()
         self.program.enableAttributeArray("position")
         self.program.enableAttributeArray("normal")
-        self.program.setAttributeBuffer("position", 0x1406, 0, 3, 24)
-        self.program.setAttributeBuffer("normal", 0x1406, 12, 3, 24)
+        self.program.enableAttributeArray("color")
+        # 顶点步长 36 字节：position(0) / normal(12) / color(24)，每项 3 个 float
+        self.program.setAttributeBuffer("position", 0x1406, 0, 3, 36)
+        self.program.setAttributeBuffer("normal", 0x1406, 12, 3, 36)
+        self.program.setAttributeBuffer("color", 0x1406, 24, 3, 36)
         self.vertex_buffer.release()
         self.vao.release()
         self.program.release()
@@ -177,9 +212,13 @@ def show_shape(shape, title="moz OpenSCAD", width=900, height=650):
     window = QMainWindow()
     window.setWindowTitle(title)
     window.resize(width, height)
-    if shape.dimension == 3:
+    if shape.is_empty:
+        # 注意：上游语义下空几何的 dimension 仍是 3（空 Nef），所以要先判空
+        view = QLabel("空几何")
+        message = "空几何"
+    elif shape.dimension == 3:
         view = Interactive3D(shape, window)
-        message = "左键旋转 | 右键平移 | 滚轮缩放"
+        message = "左键旋转 | 右键平移 | 滚轮缩放 | 颜色来自 color()"
     elif shape.dimension == 2:
         view = Interactive2D(shape, window)
         message = "SVG 矢量视图"
