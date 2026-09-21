@@ -61,6 +61,19 @@ typedef struct moz_measure {
 /* 测量几何。成功返回 0 并填充 out；失败返回负值并填充 err。 */
 int moz_geom_measure(const moz_geom *g, moz_measure *out, char **err);
 
+/* --- 几何查询（都基于与导出一致的三角化网格） ---
+ * 网格只三角化一次并缓存在句柄里，measure / triangles / face_colors / 查询共用它。
+ */
+/* 点是否在实体内（射线奇偶法）。*out 为 1/0；2D 或空几何为 0。 */
+int moz_geom_contains_point(const moz_geom *g, double x, double y, double z, int *out, char **err);
+
+/* 点到实体表面（三角面）的最短距离；空几何返回 -1 并填充 err。 */
+int moz_geom_distance_to_surface(const moz_geom *g, double x, double y, double z, double *out, char **err);
+
+/* 惯性张量（3D，单位密度，关于**质心**）。out 为 9 个 double，行优先 [Ixx,Ixy,Ixz, Iyx,Iyy,Iyz, Izx,Izy,Izz]。
+ * 2D 或空几何返回负值报错。 */
+int moz_geom_inertia(const moz_geom *g, double *out, char **err);
+
 /* --- 消息日志 ---
  * 与 OpenSCAD 控制台文本一致（含 "ECHO: " / "WARNING: " 前缀），覆盖 echo()、
  * 警告、导出与渲染日志。返回 malloc 字符串（moz_str_free 释放）。

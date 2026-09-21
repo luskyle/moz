@@ -76,7 +76,7 @@ _c_pp_char = C.POINTER(C.c_char_p)
 def _format_open_scad_value(value):
     if isinstance(value, Shape):
         return f"({value.source})"
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return "[" + ", ".join(_format_open_scad_value(v) for v in value) + "]"
     if isinstance(value, dict):
         items = [f"{_format_open_scad_value(k)}: {_format_open_scad_value(v)}" for k, v in value.items()]
@@ -155,7 +155,7 @@ class Shape:
 
     def rotate(self, a, v=None):
         if v is None:
-            if isinstance(a, (list, tuple)):
+            if isinstance(a, list | tuple):
                 body = _format_open_scad_value(a)
                 expr = f"rotate(a = {body})"
             else:
@@ -198,6 +198,15 @@ class Shape:
 
     def triangles(self):
         return self._geometry().triangles()
+
+    def contains_point(self, x, y, z):
+        return self._geometry().contains_point(x, y, z)
+
+    def distance_to_surface(self, x, y, z):
+        return self._geometry().distance_to_surface(x, y, z)
+
+    def inertia(self):
+        return self._geometry().inertia()
 
     def show(self, title="moz OpenSCAD", width=900, height=650):
         from moz_viewer import show_shape
@@ -568,7 +577,7 @@ def rotate(a, v=None, obj=None):
         if v is not None and hasattr(v, "source"):
             obj = v
             v = None
-        elif isinstance(v, (list, tuple, str, int, float, bool)):
+        elif isinstance(v, list | tuple | str | int | float | bool):
             obj = None
         else:
             raise ValueError("rotate() requires an object; use shape.rotate(a, v)")
@@ -744,6 +753,15 @@ class Part:
     def triangles(self):
         return self.shape.triangles()
 
+    def contains_point(self, x, y, z):
+        return self.shape.contains_point(x, y, z)
+
+    def distance_to_surface(self, x, y, z):
+        return self.shape.distance_to_surface(x, y, z)
+
+    def inertia(self):
+        return self.shape.inertia()
+
     def render_png(self, path, width=0, height=0, **options):
         return self.shape.render_png(path, width, height, **options)
 
@@ -828,7 +846,8 @@ class Plate(Part):
 
 
 class Bracket(Part):
-    def __init__(self, width=40, height=60, thickness=6, depth=None, hole_diameter=None, hole_positions=None, name=None):
+    def __init__(self, width=40, height=60, thickness=6, depth=None,
+                 hole_diameter=None, hole_positions=None, name=None):
         if depth is None:
             depth = width
         base = Box((width, thickness, height), center=False, name="base")
@@ -891,6 +910,13 @@ def _load():
     lib.moz_geom_face_colors_ex.argtypes = [C.c_void_p, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p]
     lib.moz_geom_triangles.restype = C.c_int
     lib.moz_geom_triangles.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]
+
+    lib.moz_geom_contains_point.restype = C.c_int
+    lib.moz_geom_contains_point.argtypes = [C.c_void_p, C.c_double, C.c_double, C.c_double, C.c_void_p, C.c_void_p]
+    lib.moz_geom_distance_to_surface.restype = C.c_int
+    lib.moz_geom_distance_to_surface.argtypes = [C.c_void_p, C.c_double, C.c_double, C.c_double, C.c_void_p, C.c_void_p]
+    lib.moz_geom_inertia.restype = C.c_int
+    lib.moz_geom_inertia.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p]
 
     lib.moz_render_options_default.restype = None
     lib.moz_render_options_default.argtypes = [C.c_void_p]
@@ -1481,6 +1507,44 @@ class Geometry:
         values = array.array("f")
         values.frombytes(data)
         return values
+
+    def contains_point(self, x, y, z):
+        """点是否在实体内（射线奇偶法）。2D 或空几何恒为 False。"""
+        self._check()
+        lib = _load()
+        err = _as_err()
+        out = C.c_int()
+        rc = lib.moz_geom_contains_point(self._handle, float(x), float(y), float(z),
+                                         C.byref(out), C.byref(err))
+        if rc != 0:
+            raise OpenSCADError(_err_msg(err) or f"contains_point failed ({rc})")
+        return bool(out.value)
+
+    def distance_to_surface(self, x, y, z):
+        """点到实体表面的最短距离；2D 或空几何抛 OpenSCADError。"""
+        self._check()
+        lib = _load()
+        err = _as_err()
+        out = C.c_double()
+        rc = lib.moz_geom_distance_to_surface(self._handle, float(x), float(y), float(z),
+                                              C.byref(out), C.byref(err))
+        if rc != 0:
+            raise OpenSCADError(_err_msg(err) or f"distance query failed ({rc})")
+        return float(out.value)
+
+    def inertia(self):
+        """惯性张量（3D，单位密度，关于**质心**）：返回 3×3 嵌套元组。
+
+        对角元是 Ixx/Iyy/Izz（立方体边长 10 → 16666.67）；2D 或空几何抛 OpenSCADError。
+        """
+        self._check()
+        lib = _load()
+        err = _as_err()
+        out = (C.c_double * 9)()
+        rc = lib.moz_geom_inertia(self._handle, out, C.byref(err))
+        if rc != 0:
+            raise OpenSCADError(_err_msg(err) or f"inertia query failed ({rc})")
+        return tuple(tuple(out[row * 3 + col] for col in range(3)) for row in range(3))
 
     def render_png(self, path, width=0, height=0, **options):
         """渲染 PNG 到文件。width/height 为 0 时用库默认尺寸（RenderSettings，512x512）。

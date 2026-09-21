@@ -232,7 +232,22 @@ struct moz_geom {
   mutable std::string log;               // 累积消息（echo / warning / 日志）
   int dimension;
   bool empty;
+
+  /* 三角化网格缓存：measure / triangles / face_colors / 几何查询共用一次三角化。
+     句柄求值完就不再变化，所以缓存不需要失效。 */
+  mutable std::vector<std::array<Vector3d, 3>> triangles;
+  mutable bool triangles_built = false;
 };
+
+/* 取（必要时计算）与 binstl 导出一致的三角化网格，缓存在句柄里 */
+static const std::vector<std::array<Vector3d, 3>> &moz_triangles_cached(const moz_geom *g)
+{
+  if (!g->triangles_built) {
+    moz_collect_triangles(g->geom, g->triangles);
+    g->triangles_built = true;
+  }
+  return g->triangles;
+}
 
 /* 解析 + 实例化出的中间结果 */
 struct moz_parsed {
@@ -481,8 +496,7 @@ extern "C" int moz_geom_measure(const moz_geom *g, moz_measure *out, char **err)
       out->centroid[2] = 0.0;
     }
   } else {
-    std::vector<std::array<Vector3d, 3>> tris;
-    moz_collect_triangles(g->geom, tris);
+    const auto &tris = moz_triangles_cached(g);
     double signed_volume = 0.0, cx = 0.0, cy = 0.0, cz = 0.0, area = 0.0;
     for (const auto &t : tris) {
       const Vector3d &a = t[0], &b = t[1], &c = t[2];
@@ -1236,9 +1250,8 @@ extern "C" int moz_geom_face_colors(const moz_geom *g, unsigned char **out, size
   std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_log_scope scope;
 
-  /* 最终网格：与 moz_export_bytes(g, "binstl") 同一条三角化路径 */
-  std::vector<std::array<Vector3d, 3>> tris;
-  moz_collect_triangles(g->geom, tris);
+  /* 最终网格：与 moz_export_bytes(g, "binstl") 同一条三角化路径（句柄内缓存） */
+  const auto &tris = moz_triangles_cached(g);
   if (tris.empty()) {
     g->log += scope.log;
     return 0;
@@ -1419,8 +1432,7 @@ extern "C" int moz_geom_triangles(const moz_geom *g, float **out, size_t *count,
   std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_log_scope scope;
 
-  std::vector<std::array<Vector3d, 3>> tris;
-  moz_collect_triangles(g->geom, tris);
+  const auto &tris = moz_triangles_cached(g);
 
   /* tris.size() 可能为 0（2D 或空几何）：malloc 0 的行为依实现而定，多留 1 字节 */
   auto *buf = static_cast<float *>(malloc(tris.size() * 9 * sizeof(float) + 1));
@@ -1433,6 +1445,126 @@ extern "C" int moz_geom_triangles(const moz_geom *g, float **out, size_t *count,
   }
   *out = buf;
   *count = tris.size();
+  g->log += scope.log;
+  return 0;
+}
+
+/* ---------------- 几何查询 ---------------- */
+
+extern "C" int moz_geom_contains_point(const moz_geom *g, double x, double y, double z,
+                                       int *out, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  if (!out) {
+    moz_set_err(err, "null out");
+    return -7;
+  }
+  *out = 0;
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_log_scope scope;
+
+  const auto &tris = moz_triangles_cached(g);
+  if (g->dimension == 3 && !tris.empty()) {
+    *out = moz_point_in_triangles(tris, Vector3d(x, y, z)) ? 1 : 0;
+  }
+  g->log += scope.log;
+  return 0;
+}
+
+extern "C" int moz_geom_distance_to_surface(const moz_geom *g, double x, double y, double z,
+                                            double *out, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  if (!out) {
+    moz_set_err(err, "null out");
+    return -7;
+  }
+  *out = -1.0;
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_log_scope scope;
+
+  const auto &tris = moz_triangles_cached(g);
+  if (tris.empty()) {
+    moz_set_err_from_log(err, scope.log, "geometry has no triangles (2D or empty)");
+    return -3;
+  }
+  const Vector3d point(x, y, z);
+  double best = std::numeric_limits<double>::infinity();
+  for (const auto &t : tris) {
+    best = std::min(best, moz_point_tri_distance(point, t[0], t[1], t[2]));
+  }
+  *out = best;
+  g->log += scope.log;
+  return 0;
+}
+
+extern "C" int moz_geom_inertia(const moz_geom *g, double *out, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  if (!out) {
+    moz_set_err(err, "null out");
+    return -7;
+  }
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_log_scope scope;
+
+  const auto &tris = moz_triangles_cached(g);
+  if (g->dimension != 3 || tris.empty()) {
+    moz_set_err(err, "inertia requires non-empty 3D geometry");
+    return -3;
+  }
+
+  /* 单位密度：按有符号四面体（原点, a, b, c）累加体积、一阶矩与二阶矩。
+     四面体的 ∫ r_i r_j dV = det/120 * (Σ_k p_k,i p_k,j + S_i S_j)，S = a + b + c。 */
+  double volume = 0.0;
+  double mx = 0.0, my = 0.0, mz = 0.0;
+  double cxx = 0.0, cxy = 0.0, cxz = 0.0, cyy = 0.0, cyz = 0.0, czz = 0.0;
+  for (const auto &t : tris) {
+    const Vector3d &a = t[0], &b = t[1], &c = t[2];
+    const double det = a.dot(b.cross(c));
+    volume += det / 6.0;
+    mx += det * (a[0] + b[0] + c[0]);
+    my += det * (a[1] + b[1] + c[1]);
+    mz += det * (a[2] + b[2] + c[2]);
+    const Vector3d s = a + b + c;
+    const double k = det / 120.0;
+    cxx += k * (a[0] * a[0] + b[0] * b[0] + c[0] * c[0] + s[0] * s[0]);
+    cyy += k * (a[1] * a[1] + b[1] * b[1] + c[1] * c[1] + s[1] * s[1]);
+    czz += k * (a[2] * a[2] + b[2] * b[2] + c[2] * c[2] + s[2] * s[2]);
+    cxy += k * (a[0] * a[1] + b[0] * b[1] + c[0] * c[1] + s[0] * s[1]);
+    cxz += k * (a[0] * a[2] + b[0] * b[2] + c[0] * c[2] + s[0] * s[2]);
+    cyz += k * (a[1] * a[2] + b[1] * b[2] + c[1] * c[2] + s[1] * s[2]);
+  }
+  if (volume == 0.0) {
+    moz_set_err(err, "inertia requires non-zero volume");
+    return -3;
+  }
+
+  const Vector3d cm(mx / (24.0 * volume), my / (24.0 * volume), mz / (24.0 * volume));
+  /* 关于原点：I = tr(C)·Identity − C */
+  const double trace = cxx + cyy + czz;
+  const double origin[9] = {
+      trace - cxx, -cxy,        -cxz,
+      -cxy,        trace - cyy, -cyz,
+      -cxz,        -cyz,        trace - czz,
+  };
+  /* 平行轴定理搬到质心：I_cm = I_origin − V·(|c|²·Identity − c cᵀ) */
+  const double c2 = cm.squaredNorm();
+  const double shift[9] = {
+      c2 - cm[0] * cm[0], -cm[0] * cm[1],      -cm[0] * cm[2],
+      -cm[1] * cm[0],      c2 - cm[1] * cm[1], -cm[1] * cm[2],
+      -cm[2] * cm[0],     -cm[2] * cm[1],      c2 - cm[2] * cm[2],
+  };
+  for (int i = 0; i < 9; ++i) out[i] = origin[i] - volume * shift[i];
   g->log += scope.log;
   return 0;
 }
