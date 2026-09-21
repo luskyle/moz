@@ -80,3 +80,46 @@ def test_non_3d_animation_falls_back_to_static(moz, qapp):
     assert w.frames == 0                       # 未进入动画模式
     assert type(w.view).__name__ == "Interactive2D"
     assert not w.anim_menu.isEnabled()
+
+
+def test_view_presets_and_clamp(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(2))
+    w._set_preset(-90.0, 0.0)
+    assert (w.view.yaw, w.view.pitch) == (-90.0, 0.0)
+    w.view.set_view(0.0, 200.0)                # pitch 要被夹住，避免与 up 平行
+    assert w.view.pitch == 89.5
+    w._reset_view()
+    assert (w.view.yaw, w.view.pitch, w.view.distance) == (-60.0, 30.0, 3.0)
+    assert list(w.view.target) == [0.0, 0.0, 0.0]
+
+
+def test_eye_direction_is_z_up(moz, qapp):
+    """OpenSCAD 是 Z-up：pitch=0 水平、pitch→90 时相机在 +Z 方向。"""
+    import numpy as np
+    view = viewer.Interactive3D([viewer._mesh_from_shape(moz.cube(2))])
+    view.set_view(0.0, 0.0)
+    assert np.allclose(view._eye_direction(), [1.0, 0.0, 0.0], atol=1e-9)
+    view.set_view(0.0, 89.5)
+    assert view._eye_direction()[2] > 0.999
+    matrix_values = view._view().data()      # 16 个 float
+    assert len(matrix_values) == 16
+    assert all(np.isfinite(value) for value in matrix_values)
+
+
+def test_color_schemes_enumerated(qapp):
+    names = viewer._color_schemes()
+    if not names:
+        pytest.skip("资源目录里没有 color-schemes")
+    assert "Starnight" in names
+
+
+def test_set_colorscheme_updates_mesh_colors(moz, qapp):
+    import numpy as np
+    w = viewer.ViewerWindow()
+    w.set_animation(lambda i: moz.Shape(f"translate([0, 0, {i * 2}]) cube(2);"), 3, 3.0)
+    before = w.view.meshes[0]["colors"].copy()
+    w.set_colorscheme("Starnight")
+    assert not np.array_equal(before, w.view.meshes[0]["colors"])
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
