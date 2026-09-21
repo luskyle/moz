@@ -20,9 +20,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -68,7 +70,19 @@
 
 namespace fs = boost::filesystem;
 
-static std::mutex g_moz_mutex;
+/* 引擎内部有静态全局状态（parser、builtins、字体缓存），所有入口串行化。
+   用**递归**互斥量：允许同一线程在动画帧回调里再调 measure/export/render
+   （回调是用户代码，可能回头调用引擎入口），否则会自死锁。 */
+static std::recursive_mutex g_moz_mutex;
+
+/* parsersettings.cc 里的库搜索路径列表（非 static 全局）。直接 extern 引用，
+   避免为了加访问器去改上游的 parsersettings.{h,cc}。上游在 parser_init() 里
+   用 OPENSCADPATH + 用户库目录 + 资源 libraries 目录填充它。 */
+extern std::vector<std::string> librarypath;
+
+/* 定义在下方（逐面颜色一段）：与 binstl 导出同一条路径的三角化网格收集 */
+static void moz_collect_triangles(const std::shared_ptr<const Geometry> &geom,
+                                  std::vector<std::array<Vector3d, 3>> &tris);
 
 /* 消息接收者：当前正在执行的操作的日志缓冲。moz_log_handler 会写入它。 */
 static std::string *g_moz_log_sink = nullptr;
@@ -354,7 +368,7 @@ extern "C" moz_geom *moz_eval_text(const char *source, const char *const *assign
     moz_set_err(err, "null source");
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_ensure_init();
   return moz_do_eval(std::string(source), "<stdin>", assignments, n_assignments, err);
 }
@@ -366,7 +380,7 @@ extern "C" moz_geom *moz_eval_file(const char *path, const char *const *assignme
     moz_set_err(err, "null path");
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_ensure_init();
   const std::string abs_path = moz_abs_docname(path);
   const std::string text = moz_read_file(abs_path);
@@ -389,10 +403,127 @@ extern "C" int moz_geom_is_empty(const moz_geom *g)
   return g->empty ? 1 : 0;
 }
 
+/* ---------------- 几何测量 ---------------- */
+
+/* 2D：收集多边形轮廓（含 GeometryList 嵌套） */
+static void moz_collect_outlines(const std::shared_ptr<const Geometry> &geom,
+                                 std::vector<std::vector<Vector2d>> &outlines)
+{
+  if (const auto geomlist = dynamic_pointer_cast<const GeometryList>(geom)) {
+    for (const auto &item : geomlist->getChildren()) moz_collect_outlines(item.second, outlines);
+  } else if (const auto poly = dynamic_pointer_cast<const Polygon2d>(geom)) {
+    for (const auto &o : poly->outlines()) outlines.push_back(o.vertices);
+  }
+}
+
+extern "C" int moz_geom_measure(const moz_geom *g, moz_measure *out, char **err)
+{
+  if (!g) {
+    moz_set_err(err, "null geometry handle");
+    return -1;
+  }
+  if (!out) {
+    moz_set_err(err, "null out");
+    return -7;
+  }
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_log_scope scope;
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  std::memset(out, 0, sizeof(*out));
+  out->dimension = g->dimension;
+  out->is_empty = g->empty ? 1 : 0;
+  out->volume = nan;
+  for (int i = 0; i < 3; ++i) {
+    out->bbox_min[i] = nan;
+    out->bbox_max[i] = nan;
+    out->centroid[i] = nan;
+  }
+
+  double lo[3] = {nan, nan, nan};
+  double hi[3] = {nan, nan, nan};
+  auto extend = [&](const Vector3d &p) {
+    for (int i = 0; i < 3; ++i) {
+      if (std::isnan(lo[i])) { lo[i] = p[i]; hi[i] = p[i]; }
+      else { lo[i] = std::min(lo[i], p[i]); hi[i] = std::max(hi[i], p[i]); }
+    }
+  };
+
+  std::set<std::array<double, 3>> unique_vertices;
+
+  if (g->dimension == 2) {
+    std::vector<std::vector<Vector2d>> outlines;
+    moz_collect_outlines(g->geom, outlines);
+    double signed_area = 0.0, cx = 0.0, cy = 0.0;
+    size_t npoints = 0;
+    for (const auto &o : outlines) {
+      npoints += o.size();
+      for (size_t i = 0; i < o.size(); ++i) {
+        const Vector2d &p = o[i];
+        extend(Vector3d(p[0], p[1], 0.0));
+        unique_vertices.insert({p[0], p[1], 0.0});
+        if (o.size() < 3) continue;
+        const Vector2d &q = o[(i + 1) % o.size()];
+        /* 鞋带公式（带符号）：逆时针正轮廓为正，顺时针孔为负 */
+        const double cross = p[0] * q[1] - q[0] * p[1];
+        signed_area += cross;
+        cx += (p[0] + q[0]) * cross;
+        cy += (p[1] + q[1]) * cross;
+      }
+    }
+    signed_area *= 0.5;
+    out->facets = npoints;
+    out->vertices = unique_vertices.size();
+    out->area = std::fabs(signed_area);
+    if (signed_area != 0.0) {
+      out->centroid[0] = cx / (6.0 * signed_area);
+      out->centroid[1] = cy / (6.0 * signed_area);
+      out->centroid[2] = 0.0;
+    }
+  } else {
+    std::vector<std::array<Vector3d, 3>> tris;
+    moz_collect_triangles(g->geom, tris);
+    double signed_volume = 0.0, cx = 0.0, cy = 0.0, cz = 0.0, area = 0.0;
+    for (const auto &t : tris) {
+      const Vector3d &a = t[0], &b = t[1], &c = t[2];
+      extend(a);
+      extend(b);
+      extend(c);
+      unique_vertices.insert({a[0], a[1], a[2]});
+      unique_vertices.insert({b[0], b[1], b[2]});
+      unique_vertices.insert({c[0], c[1], c[2]});
+      /* 有符号四面体（原点, a, b, c）：体积 det/6，质心 (a+b+c)/4 */
+      const double det = a.dot(b.cross(c));
+      signed_volume += det / 6.0;
+      cx += det * (a[0] + b[0] + c[0]);
+      cy += det * (a[1] + b[1] + c[1]);
+      cz += det * (a[2] + b[2] + c[2]);
+      area += 0.5 * (b - a).cross(c - a).norm();
+    }
+    out->facets = tris.size();
+    out->vertices = unique_vertices.size();
+    out->area = area;
+    out->volume = std::fabs(signed_volume);
+    if (signed_volume != 0.0) {
+      /* sum(体积_i × 质心_i) = sum(det×(a+b+c))/24，再除以有符号体积 */
+      out->centroid[0] = cx / (24.0 * signed_volume);
+      out->centroid[1] = cy / (24.0 * signed_volume);
+      out->centroid[2] = cz / (24.0 * signed_volume);
+    }
+  }
+
+  for (int i = 0; i < 3; ++i) {
+    out->bbox_min[i] = lo[i];
+    out->bbox_max[i] = hi[i];
+  }
+  g->log += scope.log;
+  return 0;
+}
+
 extern "C" char *moz_geom_log(const moz_geom *g, int clear)
 {
   if (!g) return nullptr;
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   char *out = strdup(g->log.c_str());
   if (clear) g->log.clear();
   return out;
@@ -405,7 +536,7 @@ extern "C" char *moz_eval_value(const char *source, const char *expression,
     moz_set_err(err, "null expression");
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_ensure_init();
 
   moz_log_scope scope;
@@ -443,18 +574,133 @@ extern "C" char *moz_eval_value(const char *source, const char *expression,
   return strdup(result.c_str());
 }
 
-extern "C" void moz_geom_free(moz_geom *g)
+/* 释放句柄的内部实现：不加锁，供已经持有 g_moz_mutex 的调用方（动画帧循环）使用 */
+static void moz_free_geom_internal(moz_geom *g)
 {
   if (!g) return;
-  /* 与求值/导出/渲染互斥：节点树释放期间不应有并发访问 */
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
   delete g->node_tree;    // AbstractNode 析构递归释放整棵节点树
   delete g->root_module;  // 模块树
   delete g;
 }
 
+extern "C" void moz_geom_free(moz_geom *g)
+{
+  if (!g) return;
+  /* 与求值/导出/渲染互斥：节点树释放期间不应有并发访问 */
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_free_geom_internal(g);
+}
+
 extern "C" void moz_str_free(char *s) { free(s); }
 extern "C" void moz_bytes_free(unsigned char *p) { free(p); }
+
+/* ---------------- 动画帧 ---------------- */
+
+/* 在 -D 列表末尾追加一个 "$t=<value>"（与上游逐帧设 $t 等价） */
+static std::vector<std::string> moz_with_time(const char *const *assignments, int n, double t)
+{
+  std::vector<std::string> items;
+  items.reserve(static_cast<size_t>(n) + 1);
+  for (int i = 0; i < n; ++i) items.emplace_back(assignments[i]);
+  items.push_back("$t=" + moz_format_number(t));
+  return items;
+}
+
+static std::vector<const char *> moz_to_cstr(const std::vector<std::string> &items)
+{
+  std::vector<const char *> ptrs;
+  ptrs.reserve(items.size());
+  for (const auto &s : items) ptrs.push_back(s.c_str());
+  return ptrs;
+}
+
+static int moz_eval_animation_impl(const std::string &text, const std::string &docname,
+                                   const char *const *assignments, int n_assignments,
+                                   int frames, double fps, moz_frame_callback callback, void *user,
+                                   char **err)
+{
+  if (!callback) {
+    moz_set_err(err, "null frame callback");
+    return -2;
+  }
+  if (frames <= 0) {
+    moz_set_err(err, "frames must be > 0 (got %d)", frames);
+    return -3;
+  }
+  if (!(fps > 0.0)) fps = 1.0;  /* 与上游一致：非法 fps 退化为 1 */
+
+  int completed = 0;
+  for (int frame = 0; frame < frames; ++frame) {
+    const double t = static_cast<double>(frame) / fps;
+    const std::vector<std::string> items = moz_with_time(assignments, n_assignments, t);
+    const std::vector<const char *> ptrs = moz_to_cstr(items);
+
+    moz_geom *g = moz_do_eval(text, docname, ptrs.data(), static_cast<int>(ptrs.size()), err);
+    if (!g) return -1;  /* err 已由 moz_do_eval 填好 */
+
+    /* 句柄只在回调期间有效；回调返回后立刻释放 */
+    const int rc = callback(user, frame, g);
+    moz_free_geom_internal(g);
+    ++completed;
+    if (rc != 0) break;  /* 回调要求提前中止 */
+  }
+  return completed;
+}
+
+extern "C" int moz_eval_animation(const char *source, const char *const *assignments, int n_assignments,
+                                  int frames, double fps, moz_frame_callback callback, void *user, char **err)
+{
+  if (!source) {
+    moz_set_err(err, "null source");
+    return -2;
+  }
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_ensure_init();
+  return moz_eval_animation_impl(std::string(source), "<stdin>", assignments, n_assignments,
+                                 frames, fps, callback, user, err);
+}
+
+extern "C" int moz_eval_animation_file(const char *path, const char *const *assignments, int n_assignments,
+                                       int frames, double fps, moz_frame_callback callback, void *user, char **err)
+{
+  if (!path) {
+    moz_set_err(err, "null path");
+    return -2;
+  }
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_ensure_init();
+  const std::string abs_path = moz_abs_docname(path);
+  const std::string text = moz_read_file(abs_path);
+  if (text.empty()) {
+    moz_set_err(err, "Can't open input file '%s'", path);
+    return -1;
+  }
+  return moz_eval_animation_impl(text, abs_path, assignments, n_assignments,
+                                 frames, fps, callback, user, err);
+}
+
+/* ---------------- 库搜索路径 ---------------- */
+
+extern "C" void moz_add_library_path(const char *path)
+{
+  if (!path || !*path) return;
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_ensure_init();
+  librarypath.push_back(fs::absolute(fs::path(path)).generic_string());
+}
+
+extern "C" char *moz_get_library_paths(void)
+{
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
+  moz_ensure_init();
+  std::string out;
+  const std::string sep = PlatformUtils::pathSeparatorChar();
+  for (size_t i = 0; i < librarypath.size(); ++i) {
+    if (i) out += sep;
+    out += librarypath[i];
+  }
+  return strdup(out.c_str());
+}
 
 /* ---------------- 渲染 ---------------- */
 
@@ -615,7 +861,7 @@ static int moz_render_impl(const moz_geom *g, const char *outfile, const moz_ren
     moz_set_err(err, "null geometry handle");
     return -1;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_log_scope scope;
 
   moz_render_options opts;
@@ -678,6 +924,7 @@ extern "C" int moz_render_png_bytes(const moz_geom *g, const moz_render_options 
 
 /* 导出实现：out 为 NULL 时写文件（outfile），否则导出到内存缓冲 */
 static int moz_export_impl(const moz_geom *g, const char *format, const char *outfile,
+                           const moz_export_options *requested,
                            unsigned char **out, size_t *out_len, char **err)
 {
   if (!g) {
@@ -693,7 +940,7 @@ static int moz_export_impl(const moz_geom *g, const char *format, const char *ou
     return moz_render_impl(g, outfile, &opts, out, out_len, err);
   }
 
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_log_scope scope;
 
   ExportFileFormatOptions fmt_options;
@@ -746,6 +993,10 @@ static int moz_export_impl(const moz_geom *g, const char *format, const char *ou
     exportInfo.sourceFilePath = g->docname;
     exportInfo.sourceFileName = fs::path(g->docname).filename().string();
   }
+  if (requested) {
+    if (requested->source_file_path) exportInfo.sourceFilePath = requested->source_file_path;
+    if (requested->source_file_name) exportInfo.sourceFileName = requested->source_file_name;
+  }
 
   if (out) {
     std::ostringstream oss(std::ios::out | std::ios::binary);
@@ -768,7 +1019,7 @@ extern "C" int moz_export(const moz_geom *g, const char *format, const char *out
     moz_set_err(err, "null outfile");
     return -6;
   }
-  return moz_export_impl(g, format, outfile, nullptr, nullptr, err);
+  return moz_export_impl(g, format, outfile, nullptr, nullptr, nullptr, err);
 }
 
 extern "C" int moz_export_bytes(const moz_geom *g, const char *format, unsigned char **out,
@@ -780,7 +1031,36 @@ extern "C" int moz_export_bytes(const moz_geom *g, const char *format, unsigned 
   }
   *out = nullptr;
   *out_len = 0;
-  return moz_export_impl(g, format, nullptr, out, out_len, err);
+  return moz_export_impl(g, format, nullptr, nullptr, out, out_len, err);
+}
+
+extern "C" void moz_export_options_default(moz_export_options *opts)
+{
+  if (!opts) return;
+  opts->source_file_name = nullptr;
+  opts->source_file_path = nullptr;
+}
+
+extern "C" int moz_export_ex(const moz_geom *g, const char *format, const char *outfile,
+                             const moz_export_options *opts, char **err)
+{
+  if (!outfile) {
+    moz_set_err(err, "null outfile");
+    return -6;
+  }
+  return moz_export_impl(g, format, outfile, opts, nullptr, nullptr, err);
+}
+
+extern "C" int moz_export_bytes_ex(const moz_geom *g, const char *format, const moz_export_options *opts,
+                                   unsigned char **out, size_t *out_len, char **err)
+{
+  if (!out || !out_len) {
+    moz_set_err(err, "null out/out_len");
+    return -7;
+  }
+  *out = nullptr;
+  *out_len = 0;
+  return moz_export_impl(g, format, nullptr, opts, out, out_len, err);
 }
 
 /* ---------------- 逐面颜色 ---------------- */
@@ -792,6 +1072,9 @@ static void moz_collect_triangles(const std::shared_ptr<const Geometry> &geom,
   if (const auto geomlist = dynamic_pointer_cast<const GeometryList>(geom)) {
     for (const auto &item : geomlist->getChildren()) moz_collect_triangles(item.second, tris);
   } else if (const auto N = dynamic_pointer_cast<const CGAL_Nef_polyhedron>(geom)) {
+    /* 无几何的模型求值出的空 Nef 是 new CGAL_Nef_polyhedron()，此时 p3 为空指针
+       （见其构造函数），不能解引用——否则测量 / 逐面颜色会段错误。 */
+    if (!N->p3) return;
     PolySet ps(3);
     /* 上游约定：createPolySetFromNefPolyhedron3 返回 false 表示成功（见 cgalutils.cc 注释） */
     if (!CGALUtils::createPolySetFromNefPolyhedron3(*(N->p3), ps)) {
@@ -917,7 +1200,7 @@ extern "C" int moz_geom_face_colors(const moz_geom *g, unsigned char **out, size
   *out = nullptr;
   *out_len = 0;
 
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_log_scope scope;
 
   /* 最终网格：与 moz_export_bytes(g, "binstl") 同一条三角化路径 */
@@ -1129,7 +1412,7 @@ extern "C" char *moz_dump(const char *source, const char *docname, const char *f
     moz_set_err(err, "null source");
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_ensure_init();
   return moz_dump_impl(std::string(source), docname ? docname : "<stdin>",
                        format, assignments, n_assignments, err);
@@ -1142,7 +1425,7 @@ extern "C" char *moz_dump_file(const char *path, const char *format,
     moz_set_err(err, "null path");
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(g_moz_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_moz_mutex);
   moz_ensure_init();
   const std::string abs_path = moz_abs_docname(path);
   const std::string text = moz_read_file(abs_path);

@@ -56,7 +56,8 @@ if os.path.isdir(os.path.join(_RESOURCE_DIR, "color-schemes")):
 
 __all__ = [
     "eval_text", "eval_file", "dump", "dump_file", "value", "number", "vector",
-    "Geometry", "OpenSCADError", "Shape", "Part", "RenderOptions",
+    "eval_animation", "add_library_path", "library_paths", "show_animation",
+    "Geometry", "OpenSCADError", "Shape", "Part", "RenderOptions", "Measure",
     "cube", "sphere", "cylinder", "circle",
     "square", "polygon", "text", "polyhedron", "union", "difference", "intersection",
     "translate", "rotate", "scale", "mirror", "multmatrix", "hull", "minkowski",
@@ -162,11 +163,15 @@ class Shape:
     def dimension(self):
         return self._geometry().dimension
 
-    def export(self, fmt, path):
-        return self._geometry().export(fmt, path)
+    def export(self, fmt, path, **options):
+        return self._geometry().export(fmt, path, **options)
 
-    def export_bytes(self, fmt):
-        return self._geometry().export_bytes(fmt)
+    def export_bytes(self, fmt, **options):
+        return self._geometry().export_bytes(fmt, **options)
+
+    @property
+    def measure(self):
+        return self._geometry().measure
 
     def render_png(self, path, width=0, height=0, **options):
         return self._geometry().render_png(path, width, height, **options)
@@ -666,11 +671,15 @@ class Part:
     def dimension(self):
         return self.shape.dimension
 
-    def export(self, fmt, path):
-        return self.shape.export(fmt, path)
+    def export(self, fmt, path, **options):
+        return self.shape.export(fmt, path, **options)
 
-    def export_bytes(self, fmt):
-        return self.shape.export_bytes(fmt)
+    def export_bytes(self, fmt, **options):
+        return self.shape.export_bytes(fmt, **options)
+
+    @property
+    def measure(self):
+        return self.shape.measure
 
     def render_png(self, path, width=0, height=0, **options):
         return self.shape.render_png(path, width, height, **options)
@@ -831,6 +840,26 @@ def _load():
     lib.moz_dump_file.restype = C.c_void_p
     lib.moz_dump_file.argtypes = [C.c_char_p, C.c_char_p, C.c_void_p, C.c_int, C.c_void_p]
 
+    lib.moz_geom_measure.restype = C.c_int
+    lib.moz_geom_measure.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p]
+
+    lib.moz_export_ex.restype = C.c_int
+    lib.moz_export_ex.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p, C.c_void_p, C.c_void_p]
+    lib.moz_export_bytes_ex.restype = C.c_int
+    lib.moz_export_bytes_ex.argtypes = [C.c_void_p, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]
+
+    lib.moz_eval_animation.restype = C.c_int
+    lib.moz_eval_animation.argtypes = [C.c_char_p, C.c_void_p, C.c_int, C.c_int, C.c_double,
+                                       C.c_void_p, C.c_void_p, C.c_void_p]
+    lib.moz_eval_animation_file.restype = C.c_int
+    lib.moz_eval_animation_file.argtypes = [C.c_char_p, C.c_void_p, C.c_int, C.c_int, C.c_double,
+                                            C.c_void_p, C.c_void_p, C.c_void_p]
+
+    lib.moz_add_library_path.restype = None
+    lib.moz_add_library_path.argtypes = [C.c_char_p]
+    lib.moz_get_library_paths.restype = C.c_void_p
+    lib.moz_get_library_paths.argtypes = []
+
     lib.moz_geom_free.argtypes = [C.c_void_p]
     lib.moz_str_free.argtypes = [C.c_void_p]
     lib.moz_bytes_free.argtypes = [C.c_void_p]
@@ -905,6 +934,78 @@ def _render_options(width=0, height=0, renderer="opencsg", faces=True, edges=Fal
     )
 
 
+class _MeasureStruct(C.Structure):
+    """moz_measure 的镜像（见 3rd/openscad/src/moz/moz_api.h）。"""
+
+    _fields_ = [
+        ("dimension", C.c_int),
+        ("is_empty", C.c_int),
+        ("bbox_min", C.c_double * 3),
+        ("bbox_max", C.c_double * 3),
+        ("volume", C.c_double),
+        ("area", C.c_double),
+        ("facets", C.c_size_t),
+        ("vertices", C.c_size_t),
+        ("centroid", C.c_double * 3),
+    ]
+
+
+class _ExportOptions(C.Structure):
+    """moz_export_options 的镜像。"""
+
+    _fields_ = [
+        ("source_file_name", C.c_char_p),
+        ("source_file_path", C.c_char_p),
+    ]
+
+
+class Measure:
+    """moz_geom_measure 的结果快照：普通 Python 值，几何句柄释放后仍可用。"""
+
+    __slots__ = ("dimension", "is_empty", "bbox_min", "bbox_max",
+                 "volume", "area", "facets", "vertices", "centroid")
+
+    def __init__(self, dimension, is_empty, bbox_min, bbox_max,
+                 volume, area, facets, vertices, centroid):
+        self.dimension = dimension
+        self.is_empty = is_empty
+        self.bbox_min = bbox_min
+        self.bbox_max = bbox_max
+        self.volume = volume
+        self.area = area
+        self.facets = facets
+        self.vertices = vertices
+        self.centroid = centroid
+
+    @property
+    def bbox(self):
+        """(min, max)，各为 3 元组；空几何为 (nan, nan, nan)。"""
+        return self.bbox_min, self.bbox_max
+
+    def __repr__(self):
+        return (f"Measure(dimension={self.dimension}, is_empty={self.is_empty}, bbox={self.bbox}, "
+                f"volume={self.volume!r}, area={self.area!r}, facets={self.facets}, "
+                f"vertices={self.vertices}, centroid={self.centroid})")
+
+
+def _measure_from_struct(m):
+    return Measure(
+        dimension=m.dimension,
+        is_empty=bool(m.is_empty),
+        bbox_min=tuple(m.bbox_min),
+        bbox_max=tuple(m.bbox_max),
+        volume=m.volume,
+        area=m.area,
+        facets=m.facets,
+        vertices=m.vertices,
+        centroid=tuple(m.centroid),
+    )
+
+
+def _encode_opt(value):
+    return value.encode() if value else None
+
+
 def eval_text(source, **variables):
     """解析并求值 SCAD 源码，返回 Geometry。关键字参数为预定义变量（对应 -D）。"""
     lib = _load()
@@ -926,12 +1027,16 @@ def eval_file(path, **variables):
     return Geometry(handle)
 
 
-def dump(source, fmt="csg", **variables):
-    """解析 SCAD 源码并输出文本结构：csg / ast / term / echo。"""
+def dump(source, fmt="csg", *, docname=None, **variables):
+    """解析 SCAD 源码并输出文本结构：csg / ast / term / echo。
+
+    docname 指定文档名（影响 ast/csg 里显示的路径；不传用 ``<stdin>``）。
+    """
     lib = _load()
     err = _as_err()
     arr, n = _assignments(variables)
-    out = C.c_void_p(lib.moz_dump(source.encode(), None, fmt.encode(), arr, n, C.byref(err)))
+    out = C.c_void_p(lib.moz_dump(source.encode(), docname.encode() if docname else None,
+                                  fmt.encode(), arr, n, C.byref(err)))
     if not out.value:
         raise OpenSCADError(_err_msg(err) or "OpenSCAD dump failed")
     try:
@@ -951,6 +1056,85 @@ def dump_file(path, fmt="csg", **variables):
         return C.string_at(out.value).decode("utf-8", "replace")
     finally:
         lib.moz_str_free(out)
+
+
+_FrameCallback = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_int, C.c_void_p)
+
+
+def eval_animation(source, frames, fps=1.0, *, callback, path=None, **variables):
+    """逐帧求值，对应上游 `--animate N`。
+
+    每帧把 ``$t = frame / fps`` 传给模型（等价 ``-D "$t=..."``），求值后调用
+    ``callback(frame, geometry)``。**geometry 只在本次回调期间有效**：回调返回后引擎
+    立即释放它，之后再访问会抛 ``OpenSCADError``。callback 返回非 0 时提前中止。
+    返回已完成的帧数。
+
+    给了 ``path`` 时按文件求值（相对路径按文档目录解析），否则把 ``source`` 当源码。
+    ``variables`` 为 ``-D`` 参数；``$t`` 由本函数逐帧注入，不要在 variables 里再给。
+    """
+    if callback is None:
+        raise ValueError("callback is required")
+    if frames <= 0:
+        raise ValueError("frames must be > 0")
+    lib = _load()
+    err = _as_err()
+    arr, n = _assignments(variables)
+
+    failures = []
+
+    def _trampoline(_user, frame, geom_handle):
+        geometry = Geometry(C.c_void_p(geom_handle), borrowed=True)
+        try:
+            result = callback(frame, geometry)
+        except BaseException as exc:  # 把 Python 异常带出 ctypes 回调
+            failures.append(exc)
+            return 1
+        finally:
+            geometry._closed = True  # 句柄即将被引擎释放，禁止回调之后再用
+        return 0 if result is None else int(result)
+
+    cb = C.cast(_FrameCallback(_trampoline), C.c_void_p)
+    if path is not None:
+        rc = lib.moz_eval_animation_file(path.encode(), arr, n, int(frames), float(fps),
+                                         cb, None, C.byref(err))
+    else:
+        rc = lib.moz_eval_animation(source.encode(), arr, n, int(frames), float(fps),
+                                    cb, None, C.byref(err))
+    if failures:
+        raise failures[0]
+    if rc < 0:
+        raise OpenSCADError(_err_msg(err) or f"animation evaluation failed ({rc})")
+    return rc
+
+
+def add_library_path(path):
+    """把一个目录追加到 `use <...>` / `import` 的库搜索路径（相对路径会绝对化）。"""
+    _load().moz_add_library_path(str(path).encode())
+
+
+def library_paths():
+    """当前库搜索路径列表（上游 OPENSCADPATH + 用户库目录 + 资源 libraries 目录）。"""
+    lib = _load()
+    out = lib.moz_get_library_paths()
+    if not out:
+        return []
+    try:
+        text = C.string_at(out).decode("utf-8", "replace")
+    finally:
+        lib.moz_str_free(out)
+    return [p for p in text.split(os.pathsep) if p]
+
+
+def show_animation(frame_fn, frames, fps=8.0, title="moz animation", width=900, height=650):
+    """打开预览器**播放**动画。
+
+    ``frame_fn(i)`` 返回第 i 帧的 Shape（i 从 0 起，共 frames 帧），``fps`` 为播放帧率。
+    帧在打开窗口时一次性预计算，之后播放/逐帧不再重新求值。
+
+    与 ``moz.eval_animation``（逐帧回调，用于批处理）互补：这个用于**看**。
+    """
+    from moz_viewer import show_animation as _show_animation
+    return _show_animation(frame_fn, frames, fps=fps, title=title, width=width, height=height)
 
 
 def _split_scad_list(text):
@@ -1053,9 +1237,11 @@ def vector(expression, source="", **variables):
 class Geometry:
     """一次解析 + 求值的产物句柄。释放底层节点树 / 模块树 / 几何。"""
 
-    def __init__(self, handle):
+    def __init__(self, handle, borrowed=False):
         self._handle = handle
         self._closed = False
+        # borrowed=True：句柄归引擎所有（如动画帧回调里的临时几何），close() 不释放
+        self._borrowed = borrowed
 
     @property
     def dimension(self):
@@ -1068,6 +1254,22 @@ class Geometry:
         """是否为空几何（零面积 / 零体积）。"""
         self._check()
         return bool(_load().moz_geom_is_empty(self._handle))
+
+    @property
+    def measure(self):
+        """几何测量快照：包围盒 / 体积 / 表面积 / 面数 / 顶点数 / 质心（见 Measure）。
+
+        3D 用与 ``export_bytes("binstl")`` 同一三角化路径的网格，2D 用多边形轮廓。
+        空几何的 bbox / volume / centroid 为 nan。
+        """
+        self._check()
+        lib = _load()
+        err = _as_err()
+        m = _MeasureStruct()
+        rc = lib.moz_geom_measure(self._handle, C.byref(m), C.byref(err))
+        if rc != 0:
+            raise OpenSCADError(_err_msg(err) or f"measure failed ({rc})")
+        return _measure_from_struct(m)
 
     @property
     def log(self):
@@ -1094,24 +1296,37 @@ class Geometry:
         finally:
             lib.moz_str_free(out)
 
-    def export(self, fmt, path):
-        """导出到文件。fmt: stl / binstl / asciistl / off / amf / 3mf / dxf / svg / pdf / nef3 / nefdbg"""
+    def export(self, fmt, path, *, source_file_name=None, source_file_path=None):
+        """导出到文件。fmt: stl / binstl / asciistl / off / amf / 3mf / dxf / svg / pdf / nef3 / nefdbg
+
+        source_file_name / source_file_path 单独覆盖 PDF 用的源文档信息
+        （见 moz_api.h 的导出选项；不传则沿用几何句柄记住的文档）。
+        """
         self._check()
         lib = _load()
         err = _as_err()
-        rc = lib.moz_export(self._handle, fmt.encode(), path.encode(), C.byref(err))
+        if source_file_name is None and source_file_path is None:
+            rc = lib.moz_export(self._handle, fmt.encode(), path.encode(), C.byref(err))
+        else:
+            opts = _ExportOptions(_encode_opt(source_file_name), _encode_opt(source_file_path))
+            rc = lib.moz_export_ex(self._handle, fmt.encode(), path.encode(), C.byref(opts), C.byref(err))
         if rc != 0:
             raise OpenSCADError(_err_msg(err) or f"export failed ({rc})")
 
-    def export_bytes(self, fmt):
-        """导出到内存，返回 bytes。"""
+    def export_bytes(self, fmt, *, source_file_name=None, source_file_path=None):
+        """导出到内存，返回 bytes。source_file_name / source_file_path 同 export()。"""
         self._check()
         lib = _load()
         err = _as_err()
         buf = C.c_void_p()
         length = C.c_size_t()
-        rc = lib.moz_export_bytes(self._handle, fmt.encode(),
-                                  C.byref(buf), C.byref(length), C.byref(err))
+        if source_file_name is None and source_file_path is None:
+            rc = lib.moz_export_bytes(self._handle, fmt.encode(),
+                                      C.byref(buf), C.byref(length), C.byref(err))
+        else:
+            opts = _ExportOptions(_encode_opt(source_file_name), _encode_opt(source_file_path))
+            rc = lib.moz_export_bytes_ex(self._handle, fmt.encode(), C.byref(opts),
+                                         C.byref(buf), C.byref(length), C.byref(err))
         if rc != 0:
             raise OpenSCADError(_err_msg(err) or f"export failed ({rc})")
         try:
@@ -1166,10 +1381,18 @@ class Geometry:
         finally:
             lib.moz_bytes_free(buf)
 
+    def show(self, title="moz OpenSCAD", width=900, height=650):
+        """打开预览器显示这个几何（3D 用 OpenGL，2D 用 SVG）。"""
+        self._check()
+        from moz_viewer import show_shape
+        show_shape(self, title=title, width=width, height=height)
+
     def close(self):
-        if not self._closed:
+        if self._closed:
+            return
+        self._closed = True
+        if not self._borrowed:
             _load().moz_geom_free(self._handle)
-            self._closed = True
 
     def _check(self):
         if self._closed:

@@ -42,6 +42,25 @@ int moz_geom_dimension(const moz_geom *g);
 /* 几何是否为空（零面积 / 零体积）；无效句柄返回 1 */
 int moz_geom_is_empty(const moz_geom *g);
 
+/* --- 几何测量 ---
+ * 3D 用与 moz_export_bytes(g, "binstl") 同一条三角化路径的网格；2D 用多边形轮廓。
+ * 所有量都在求值后的世界坐标上计算（导出/渲染口径一致）。
+ */
+typedef struct moz_measure {
+  int dimension;       /* 3 / 2；空几何按上游语义仍为 3 */
+  int is_empty;        /* 空几何（零面积 / 零体积）为 1 */
+  double bbox_min[3];  /* 包围盒最小角（2D 的 z 恒为 0） */
+  double bbox_max[3];  /* 包围盒最大角 */
+  double volume;       /* 3D 体积；2D 为 NaN */
+  double area;         /* 3D 表面积；2D 面积 */
+  size_t facets;       /* 3D 三角面数；2D 轮廓顶点数（与 Geometry::numFacets 口径一致） */
+  size_t vertices;     /* 去重后的顶点数 */
+  double centroid[3];  /* 3D 体积质心；2D 面积质心（空几何为 NaN） */
+} moz_measure;
+
+/* 测量几何。成功返回 0 并填充 out；失败返回负值并填充 err。 */
+int moz_geom_measure(const moz_geom *g, moz_measure *out, char **err);
+
 /* --- 消息日志 ---
  * 与 OpenSCAD 控制台文本一致（含 "ECHO: " / "WARNING: " 前缀），覆盖 echo()、
  * 警告、导出与渲染日志。返回 malloc 字符串（moz_str_free 释放）。
@@ -57,6 +76,26 @@ char *moz_geom_log(const moz_geom *g, int clear);
  */
 int moz_export(const moz_geom *g, const char *format, const char *outfile, char **err);
 int moz_export_bytes(const moz_geom *g, const char *format, unsigned char **out, size_t *out_len, char **err);
+
+/* --- 导出选项 ---
+ * 对应上游 ExportInfo 里可配置的字段。OpenSCAD 2021.01 的导出格式本身没有更多开关：
+ * STL 只有 ascii/二进制之分（由 format 决定），3MF 无元数据/单位参数，
+ * AMF 的 unit="millimeter" 与 producer 元数据是硬编码，PDF 会用源文档名做标题。
+ * 因此这里只透出真正可配的 sourceFileName / sourceFilePath（仅 PDF 会用到）。
+ * 字段为 NULL 时沿用几何句柄记住的源文档（moz_eval_file 求值的那个文件）。
+ */
+typedef struct moz_export_options {
+  const char *source_file_name;  /* PDF 标题用的源文件名；NULL = 用几何句柄的文档名 */
+  const char *source_file_path;  /* PDF 用的源文件路径；NULL = 用几何句柄的文档路径 */
+} moz_export_options;
+
+void moz_export_options_default(moz_export_options *opts);
+
+/* 带导出选项的版本；opts 为 NULL 时与 moz_export / moz_export_bytes 等价 */
+int moz_export_ex(const moz_geom *g, const char *format, const char *outfile,
+                  const moz_export_options *opts, char **err);
+int moz_export_bytes_ex(const moz_geom *g, const char *format, const moz_export_options *opts,
+                        unsigned char **out, size_t *out_len, char **err);
 
 /* --- 逐面颜色 ---
  * *out 为 4 字节/面（RGBA，0..255）的缓冲（moz_bytes_free 释放），回调顺序与
@@ -104,6 +143,30 @@ char *moz_dump(const char *source, const char *docname, const char *format,
                const char *const *assignments, int n_assignments, char **err);
 char *moz_dump_file(const char *path, const char *format,
                     const char *const *assignments, int n_assignments, char **err);
+
+/* --- 动画帧 ---
+ * 对应上游 `--animate N`：逐帧把 $t = frame / fps 传给模型（等价 -D "$t=..."），
+ * 每帧解析 + 实例化 + 几何求值一次，然后回调。回调里拿到的是**临时句柄**，
+ * 仅在本次回调期间有效，回调返回后立即被释放——不要保存它。
+ * 回调返回值非 0 时提前中止（moz_eval_animation 返回已完成的帧数）。
+ * frames <= 0 视为错误；fps <= 0 视为 1（与上游一致）。
+ */
+typedef int (*moz_frame_callback)(void *user, int frame, const moz_geom *geom);
+
+int moz_eval_animation(const char *source, const char *const *assignments, int n_assignments,
+                       int frames, double fps, moz_frame_callback callback, void *user, char **err);
+int moz_eval_animation_file(const char *path, const char *const *assignments, int n_assignments,
+                            int frames, double fps, moz_frame_callback callback, void *user, char **err);
+
+/* --- 库搜索路径 ---
+ * 对应上游用法 `use <lib/foo.scad>` / `import` 的库目录搜索列表
+ * （上游启动时由 OPENSCADPATH + 用户库目录 + 资源 libraries 目录组成）。
+ * moz_add_library_path 把目录追加进列表（相对路径会绝对化）。
+ */
+void moz_add_library_path(const char *path);
+
+/* 返回当前库搜索路径，多条用路径分隔符连接（malloc 字符串，moz_str_free 释放） */
+char *moz_get_library_paths(void);
 
 /* --- 内存管理 --- */
 void moz_geom_free(moz_geom *g);
