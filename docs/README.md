@@ -43,8 +43,17 @@ PYTHONPATH=py python3 py/examples/Basics/CSG.py          # 会打开预览器窗
 PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
 
 # 5) 跑单元测试（pytest；不需要显示器的用例也可跑）
-PYTHONPATH=py python3 -m pytest
+python3 -m pytest                     # 在仓库根目录执行
+python3 -m pytest -v                  # 看每个用例名
+python3 -m pytest py/tests/test_measure.py::test_cube_measure   # 单个用例
 ```
 
 `py/verify_examples.py` 的判定标准见 [verification.md](verification.md)（当前 48 个示例全部通过）。
 单元测试在 `py/tests/`，覆盖测量、导出、取值、动画、库路径、网格颜色、`Shape` 缓存与 viewer 逻辑。
+
+测试的前置：
+
+- 需要 `pytest`（`pip install pytest`；或 `pip install -e ".[test]"`）。**用你装了依赖的那个解释器**跑，
+  否则会出现"没反应/全 skip"——例如只有 `pytest` 没装、或 `numpy`/`PySide6` 缺失时 viewer 用例会被 skip。
+- 还没构建 `libmozopenscad.so` 时，整个测试集会 **skip**（不会报错）。build 见 [build.md](build.md)。
+- 在仓库根目录跑即可（`pyproject.toml` 里已设 `testpaths = ["py/tests"]`，无需设 `PYTHONPATH`）。

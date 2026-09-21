@@ -25,4 +25,3 @@ test = ["pytest>=7"]
 
 [tool.pytest.ini_options]
 testpaths = ["py/tests"]
-addopts = "-q"
