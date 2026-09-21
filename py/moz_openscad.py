@@ -57,7 +57,7 @@ if os.path.isdir(os.path.join(_RESOURCE_DIR, "color-schemes")):
 
 __all__ = [
     "eval_text", "eval_file", "dump", "dump_file", "value", "number", "vector",
-    "eval_animation", "add_library_path", "library_paths", "show_animation",
+    "eval_animation", "add_library_path", "library_paths", "show_animation", "show_parts",
     "Geometry", "OpenSCADError", "Shape", "Part", "RenderOptions", "Measure",
     "cube", "sphere", "cylinder", "circle",
     "square", "polygon", "text", "polyhedron", "union", "difference", "intersection",
@@ -1263,6 +1263,16 @@ def show_animation(frame_fn, frames, fps=8.0, title="moz animation", width=900, 
     """
     from moz_viewer import show_animation as _show_animation
     return _show_animation(frame_fn, frames, fps=fps, title=title, width=width, height=height)
+
+
+def show_parts(parts, title="moz parts", width=1100, height=700):
+    """打开预览器显示**多个命名部件**。
+
+    ``parts`` 是 ``(name, Shape)`` 序列或 ``{name: Shape}`` 字典；右侧列表可勾选显示/隐藏，
+    左键单击会报告点到的部件名与世界坐标。
+    """
+    from moz_viewer import show_parts as _show_parts
+    return _show_parts(parts, title=title, width=width, height=height)
 
 
 def _split_scad_list(text):

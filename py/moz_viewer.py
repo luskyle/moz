@@ -11,19 +11,22 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QMatrix4x4, QOpenGLFunctions, QPainter, QVector3D
+from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QImage, QKeySequence, QMatrix4x4, QOpenGLFunctions, QPainter, QVector3D
 from PySide6.QtOpenGL import QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLVertexArrayObject
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (
     QApplication,
+    QDockWidget,
     QDoubleSpinBox,
     QFileDialog,
     QGraphicsScene,
     QGraphicsView,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
@@ -34,6 +37,8 @@ from PySide6.QtWidgets import (
 
 # 未着色对象在预览器里的默认材质色（与 OpenSCAD 默认配色同色系）
 _DEFAULT_COLOR = np.asarray([0.20, 0.62, 0.90], dtype=np.float32)
+# 边线（wireframe 叠加）的颜色：深色，压在亮色实体上看得出轮廓
+_EDGE_COLOR = np.asarray([0.10, 0.12, 0.15], dtype=np.float32)
 
 
 def _color_schemes():
@@ -129,8 +134,26 @@ def _line_geometry(show_axes, show_grid):
             np.asarray(colors, dtype=np.float32).reshape(-1, 3))
 
 
+def _edge_geometry(points, tolerance=1e-5):
+    """三角面的边 → 线段顶点（去重后的唯一边），用于 wireframe 叠加。
+
+    先按 `tolerance` 量化顶点再 `np.unique`，避免逐三角面 Python 循环（上万面也很快）。
+    """
+    if not len(points):
+        return None
+    quantized = np.round(points.astype(np.float64) / tolerance).astype(np.int64)
+    unique_vertices, inverse = np.unique(quantized, axis=0, return_inverse=True)
+    triangles = inverse.reshape(-1, 3)
+    edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]], axis=0)
+    edges = np.unique(np.sort(edges, axis=1), axis=0)
+    vertices = unique_vertices.astype(np.float64) * tolerance
+    return vertices[edges.reshape(-1)].astype(np.float32)
+
+
 class Interactive3D(QOpenGLWidget):
     """3D 视图：可显示一帧或一串动画帧（帧间共用同一 center/radius，避免抖动）。"""
+
+    picked = Signal(object)      # 点选结果（dict）或 None
 
     def __init__(self, meshes, parent=None):
         super().__init__(parent)
@@ -138,6 +161,7 @@ class Interactive3D(QOpenGLWidget):
             raise ValueError("Interactive3D needs at least one mesh")
         self.meshes = meshes
         self.index = 0
+        self.part_ranges = None      # 多部件模式：[[name, start_vertex, count, visible], ...]
         self.center, self.radius = self._bounds(meshes)
         self.program = None
         self.gl = None
@@ -147,9 +171,14 @@ class Interactive3D(QOpenGLWidget):
         self.line_vao = None
         self.line_buffer = None
         self.line_count = 0
+        self.edge_vao = None
+        self.edge_buffer = None
+        self.edge_count = 0
         self.show_axes = False
         self.show_grid = False
+        self.show_edges = False
         self.last_pos = QPoint()
+        self._press_pos = None
         self.orthographic = False
         self.reset_view()
         self.setMinimumSize(640, 480)
@@ -233,6 +262,82 @@ class Interactive3D(QOpenGLWidget):
         vpf = float(np.degrees(2.0 * np.arctan(0.55))) if self.orthographic else 45.0
         return vpr, [float(value) for value in target_w], float(self.radius * self.distance), vpf
 
+    def _ray(self, x, y):
+        """屏幕坐标 → 归一化空间里的一条射线 (origin, direction)。"""
+        width, height = max(self.width(), 1), max(self.height(), 1)
+        aspect = width / height
+        ndc_x = 2.0 * x / width - 1.0
+        ndc_y = 1.0 - 2.0 * y / height
+
+        view_direction = -self._eye_direction()          # 视线方向（eye → target）
+        world_up = np.array([0.0, 0.0, 1.0])
+        right = np.cross(view_direction, world_up)
+        right = right / max(float(np.linalg.norm(right)), 1e-9)
+        up = np.cross(right, view_direction)
+        if self.orthographic:
+            half = self.distance * 0.55
+            origin = self.target + right * (ndc_x * half * aspect) + up * (ndc_y * half)
+            direction = view_direction
+        else:
+            half = np.tan(np.radians(45.0) / 2.0)
+            origin = self.target + self.distance * self._eye_direction()
+            direction = view_direction + right * (ndc_x * half * aspect) + up * (ndc_y * half)
+            direction = direction / max(float(np.linalg.norm(direction)), 1e-9)
+        return origin, direction
+
+    def pick(self, x, y):
+        """按屏幕坐标拾取最近的面；返回 dict（世界坐标、三角形号、部件名）或 None。"""
+        points = self.meshes[self.index]["points"]
+        if not len(points):
+            return None
+        # mesh["points"] 是世界坐标（归一化只在上传 GPU 时做），这里先归一化到与 _ray 同一个空间
+        triangles = self._normalized(self.meshes[self.index]).reshape(-1, 3, 3).astype(np.float64)
+        candidates = np.arange(len(triangles))
+        if self.part_ranges is not None:      # 只测可见部件
+            visible = []
+            for _name, start, count, shown in self.part_ranges:
+                if shown and count:
+                    visible.append(np.arange(start // 3, (start + count) // 3))
+            candidates = np.concatenate(visible) if visible else np.empty(0, dtype=np.int64)
+        if not len(candidates):
+            return None
+        triangles = triangles[candidates]
+
+        origin, direction = self._ray(x, y)
+        v0 = triangles[:, 0]
+        edge1 = triangles[:, 1] - v0
+        edge2 = triangles[:, 2] - v0
+        pvec = np.cross(direction, edge2)
+        det = np.einsum("ij,ij->i", edge1, pvec)
+        mask = np.abs(det) > 1e-12
+        inverse = np.zeros_like(det)
+        inverse[mask] = 1.0 / det[mask]
+        tvec = origin - v0
+        bary_u = np.einsum("ij,ij->i", tvec, pvec) * inverse
+        mask &= (bary_u >= -1e-9) & (bary_u <= 1.0 + 1e-9)
+        qvec = np.cross(tvec, edge1)
+        bary_v = (qvec @ direction) * inverse      # direction 是 1-D，用矩阵乘而不是 einsum
+        mask &= (bary_v >= -1e-9) & (bary_u + bary_v <= 1.0 + 1e-9)
+        distance = np.einsum("ij,ij->i", edge2, qvec) * inverse
+        mask &= distance > 1e-9
+        if not mask.any():
+            return None
+        nearest = int(np.argmin(np.where(mask, distance, np.inf)))
+        hit = int(candidates[nearest])
+        hit_normalized = origin + distance[nearest] * direction
+        part = None
+        if self.part_ranges is not None:
+            for name, start, count, shown in self.part_ranges:
+                if shown and start // 3 <= hit < (start + count) // 3:
+                    part = name
+                    break
+        return {
+            "world": self.center + self.radius * hit_normalized,
+            "normalized": hit_normalized,
+            "triangle": int(hit),
+            "part": part,
+        }
+
     def _upload(self):
         """把当前帧的顶点数据写进 vertex_buffer（**要求调用方已 bind**）。
 
@@ -252,6 +357,10 @@ class Interactive3D(QOpenGLWidget):
             self.vertex_buffer.bind()
             self._upload()
             self.vertex_buffer.release()
+        if self.show_edges and self.edge_buffer is not None:
+            self.edge_buffer.bind()
+            self._upload_edges()
+            self.edge_buffer.release()
         self.update()
 
     def _line_positions(self):
@@ -279,6 +388,34 @@ class Interactive3D(QOpenGLWidget):
             self.line_buffer.bind()
             self._upload_lines()
             self.line_buffer.release()
+        self.update()
+
+    def _edge_positions(self):
+        """按当前开关返回边线几何，并同步 edge_count（窗口未显示时也要一致）。"""
+        if not self.show_edges:
+            self.edge_count = 0
+            return None
+        positions = _edge_geometry(self._normalized(self.meshes[self.index]))
+        self.edge_count = 0 if positions is None else len(positions)
+        return positions
+
+    def _upload_edges(self):
+        """把当前帧的唯一边写进 edge_buffer（**要求调用方已 bind**）。"""
+        positions = self._edge_positions()
+        if positions is None:
+            return
+        colors = np.tile(_EDGE_COLOR, (len(positions), 1))
+        interleaved = np.hstack((positions, colors)).astype(np.float32)
+        self.edge_buffer.allocate(interleaved.tobytes(), interleaved.nbytes)
+
+    def set_edges(self, show):
+        """开关 wireframe 边线（视图菜单）。"""
+        self.show_edges = bool(show)
+        self._edge_positions()          # GL 缓冲可能还没建，先同步 edge_count
+        if self.edge_buffer is not None:
+            self.edge_buffer.bind()
+            self._upload_edges()
+            self.edge_buffer.release()
         self.update()
 
     def initializeGL(self):
@@ -382,6 +519,23 @@ class Interactive3D(QOpenGLWidget):
         self.line_vao.release()
         self.line_program.release()
 
+        # 边线（wireframe 叠加）：复用同一套线框着色器，单独一个顶点缓冲
+        self.edge_vao = QOpenGLVertexArrayObject(self)
+        self.edge_vao.create()
+        self.edge_vao.bind()
+        self.edge_buffer = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
+        self.edge_buffer.create()
+        self.edge_buffer.bind()
+        self._upload_edges()
+        self.line_program.bind()
+        self.line_program.enableAttributeArray("position")
+        self.line_program.enableAttributeArray("color")
+        self.line_program.setAttributeBuffer("position", 0x1406, 0, 3, 24)
+        self.line_program.setAttributeBuffer("color", 0x1406, 12, 3, 24)
+        self.edge_buffer.release()
+        self.edge_vao.release()
+        self.line_program.release()
+
     def resizeGL(self, width, height):
         self.gl.glViewport(0, 0, width, max(height, 1))
 
@@ -394,10 +548,29 @@ class Interactive3D(QOpenGLWidget):
         view = self._view()
         self.program.setUniformValue("mvp", projection * view)
         self.program.setUniformValue("modelView", view)
+        if self.edge_count:
+            # 让边线压过面（否则共面处会 z-fighting）
+            self.gl.glEnable(0x8037)          # GL_POLYGON_OFFSET_FILL
+            self.gl.glPolygonOffset(1.0, 1.0)
         self.vao.bind()
-        self.gl.glDrawArrays(0x0004, 0, len(self.meshes[self.index]["points"]))
+        if self.part_ranges is None:
+            self.gl.glDrawArrays(0x0004, 0, len(self.meshes[self.index]["points"]))
+        else:                                   # 多部件：只画可见部件（各段连续，用 first 偏移）
+            for _name, start, count, shown in self.part_ranges:
+                if shown and count:
+                    self.gl.glDrawArrays(0x0004, start, count)
         self.vao.release()
+        if self.edge_count:
+            self.gl.glDisable(0x8037)
         self.program.release()
+
+        if self.edge_count and self.edge_buffer is not None:
+            self.line_program.bind()
+            self.line_program.setUniformValue("mvp", projection * view)
+            self.edge_vao.bind()
+            self.gl.glDrawArrays(0x0001, 0, self.edge_count)   # GL_LINES
+            self.edge_vao.release()
+            self.line_program.release()
 
         if self.line_count and self.line_program is not None:
             self.line_program.bind()
@@ -418,6 +591,18 @@ class Interactive3D(QOpenGLWidget):
 
     def mousePressEvent(self, event):
         self.last_pos = event.position().toPoint()
+        self._press_pos = self.last_pos
+
+    def mouseReleaseEvent(self, event):
+        """左键单击（不是拖动）→ 拾取最近的面并发出 picked 信号。"""
+        if event.button() != Qt.LeftButton or self._press_pos is None:
+            return
+        current = event.position().toPoint()
+        moved = (current - self._press_pos).manhattanLength()
+        self._press_pos = None
+        if moved > 4:          # 拖动是旋转视角，不算点选
+            return
+        self.picked.emit(self.pick(current.x(), current.y()))
 
     def mouseMoveEvent(self, event):
         current = event.position().toPoint()
@@ -494,6 +679,8 @@ class ViewerWindow(QMainWindow):
         self.index = 0
         self.status_hint = ""
         self.colorscheme = None   # None = 用库当前配色
+        self.part_shapes = {}     # 多部件模式：name -> Shape
+        self.parts_dock = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance)
         self._build_menus()
@@ -538,13 +725,15 @@ class ViewerWindow(QMainWindow):
         """显示单个静态几何。"""
         self.shape = shape
         self.frame_fn = None
+        self.part_shapes = {}
+        self._remove_parts_dock()
         if shape.is_empty:
             # 上游语义下空几何的 dimension 仍是 3（空 Nef），所以要先判空
             self.view = QLabel("空几何")
             self.status_hint = "空几何"
         elif shape.dimension == 3:
-            self.view = Interactive3D([_mesh_from_shape(shape)], self)
-            self.status_hint = "左键旋转 | 右键平移 | 滚轮缩放 | 颜色来自 color()"
+            self.view = self._make_3d_view([_mesh_from_shape(shape)])
+            self.status_hint = "左键旋转 | 右键平移 | 滚轮缩放 | 左键单击测量 | 颜色来自 color()"
         elif shape.dimension == 2:
             self.view = Interactive2D(shape, self)
             self.status_hint = "SVG 矢量视图 | 滚轮缩放 | 左键拖动平移 | 双击适应窗口"
@@ -566,6 +755,8 @@ class ViewerWindow(QMainWindow):
             raise ValueError("frames must be > 0")
         self.frame_fn = frame_fn
         self.shape = None
+        self.part_shapes = {}
+        self._remove_parts_dock()
         meshes = []
         first = None
         # 预计算是帧数与求值次数的乘积，大模型会慢 —— 给进度并可取消。
@@ -595,7 +786,7 @@ class ViewerWindow(QMainWindow):
         if cancelled:
             self.status_hint = f"已取消（预计算了 {len(meshes)}/{frames} 帧）"
             if meshes:
-                self.view = Interactive3D(meshes, self)
+                self.view = self._make_3d_view(meshes)
                 self.setCentralWidget(self.view)
                 self.frames = len(meshes)
                 self._refresh_status()
@@ -610,7 +801,7 @@ class ViewerWindow(QMainWindow):
 
         self.frames = len(meshes)
         self.fps = float(fps) if fps > 0 else 8.0
-        self.view = Interactive3D(meshes, self)
+        self.view = self._make_3d_view(meshes)
         self.setCentralWidget(self.view)
         self.anim_menu.setEnabled(True)
         self.index = 0
@@ -626,6 +817,83 @@ class ViewerWindow(QMainWindow):
         self._refresh_status()
 
     # ------------------------------------------------------------------ 菜单
+    def _make_3d_view(self, meshes, part_ranges=None):
+        """建 Interactive3D 并接上点选信号（多部件时带上分段信息）。"""
+        view = Interactive3D(meshes, self)
+        if part_ranges is not None:
+            view.part_ranges = part_ranges
+        view.picked.connect(self._on_picked)
+        return view
+
+    def _remove_parts_dock(self):
+        if self.parts_dock is not None:
+            self.removeDockWidget(self.parts_dock)
+            self.parts_dock = None
+
+    def set_parts(self, parts, title=None):
+        """显示多个命名部件：右侧列表可勾选显示/隐藏，点选会报告部件名。
+
+        parts 是 ``(name, Shape)`` 序列或 ``{name: Shape}`` 字典；各部件共用一套
+        居中/缩放（否则小零件会被放大得和大的一样）。
+        """
+        items = list(parts.items()) if isinstance(parts, dict) else list(parts)
+        if not items:
+            raise ValueError("set_parts requires at least one part")
+        if title:
+            self.setWindowTitle(title)
+        self.shape = None
+        self.frame_fn = None
+        self.part_shapes = dict(items)
+        self._remove_parts_dock()
+
+        part_meshes = [_mesh_from_shape(shape) for _name, shape in items]
+        combined = {key: np.vstack([mesh[key] for mesh in part_meshes])
+                    for key in ("points", "normals", "colors")}
+        ranges, offset = [], 0
+        for (name, _shape), mesh in zip(items, part_meshes, strict=False):
+            count = len(mesh["points"])
+            ranges.append([name, offset, count, True])
+            offset += count
+
+        self.view = self._make_3d_view([combined], part_ranges=ranges)
+        self.setCentralWidget(self.view)
+        self.anim_menu.setEnabled(False)
+        self.anim_bar.setVisible(False)
+        self._build_parts_dock([name for name, _shape in items])
+        self.status_hint = "左键旋转 | 右键平移 | 滚轮缩放 | 左键单击选部件 | 右侧列表可隐藏部件"
+        self._refresh_status()
+
+    def _build_parts_dock(self, names):
+        self.parts_list = QListWidget(self)
+        for name in names:
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.parts_list.addItem(item)
+        self.parts_list.itemChanged.connect(self._on_part_toggled)
+        self.parts_dock = QDockWidget("部件", self)
+        self.parts_dock.setWidget(self.parts_list)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.parts_dock)
+
+    def _on_part_toggled(self, item):
+        if isinstance(self.view, Interactive3D) and self.view.part_ranges:
+            row = self.parts_list.row(item)
+            if row < len(self.view.part_ranges):
+                self.view.part_ranges[row][3] = item.checkState() == Qt.Checked
+                self.view.update()
+
+    def _on_picked(self, info):
+        """点选结果 → 状态栏（世界坐标、距原点距离、面号、部件名）。"""
+        if not info:
+            self.statusBar().showMessage("点选：未命中")
+            return
+        x, y, z = (float(v) for v in info["world"])
+        distance = float(np.linalg.norm(info["world"]))
+        part = f" | 部件 {info['part']}" if info.get("part") else ""
+        self.statusBar().showMessage(
+            f"点选：({x:.3f}, {y:.3f}, {z:.3f}) | 距原点 {distance:.3f}"
+            f" | 面 #{info['triangle']}{part}")
+
     def _build_menus(self):
         bar = self.menuBar()
 
@@ -634,6 +902,7 @@ class ViewerWindow(QMainWindow):
         self._add_action(file_menu, "导出当前帧 PNG（引擎渲染）…", self._export_png, QKeySequence("Ctrl+E"))
         self._add_action(file_menu, "保存视图截图…", self._save_screenshot, QKeySequence("Ctrl+Shift+S"))
         self._add_action(file_menu, "导出整个视图序列 PNG…（按当前视角）", self._export_frames_png)
+        self._add_action(file_menu, "导出动画 GIF…（需要 Pillow）", self._export_gif, QKeySequence("Ctrl+G"))
         file_menu.addSeparator()
         self._add_action(file_menu, "退出", self.close, QKeySequence("Ctrl+Q"))
 
@@ -656,6 +925,9 @@ class ViewerWindow(QMainWindow):
         self.grid_action = QAction("显示地面网格（Z=0）", self, checkable=True)
         self.grid_action.toggled.connect(lambda checked: self._set_overlay(show_grid=checked))
         view_menu.addAction(self.grid_action)
+        self.edges_action = QAction("显示边线（wireframe）", self, checkable=True)
+        self.edges_action.toggled.connect(lambda checked: self._set_edges(checked))
+        view_menu.addAction(self.edges_action)
         scheme_menu = view_menu.addMenu("配色方案")
         self._add_action(scheme_menu, "默认（库当前配色）", lambda: self.set_colorscheme(None))
         for name in _color_schemes():
@@ -750,6 +1022,10 @@ class ViewerWindow(QMainWindow):
         if isinstance(self.view, Interactive3D):
             self.view.set_overlays(show_axes=show_axes, show_grid=show_grid)
 
+    def _set_edges(self, checked):
+        if isinstance(self.view, Interactive3D):
+            self.view.set_edges(checked)
+
     def set_colorscheme(self, name):
         """切换配色：重新取逐面颜色并重传缓冲。
 
@@ -761,13 +1037,26 @@ class ViewerWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"切换配色 {name or '默认'} …")
         QApplication.processEvents()
-        source = self.frame_fn if self.frame_fn is not None else (lambda _index: self.shape)
-        for index, mesh in enumerate(self.view.meshes):
-            colors = _face_colors(source(index), name)
-            n_triangles = len(mesh["points"]) // 3
-            if colors is not None and len(colors) == n_triangles * 4:
-                rgb = np.frombuffer(colors, np.uint8).reshape(-1, 4)[:, :3].astype(np.float32) / 255.0
-                mesh["colors"] = np.repeat(rgb, 3, axis=0)
+
+        def _rgb(colors):
+            if colors is None:
+                return None
+            return np.frombuffer(colors, np.uint8).reshape(-1, 4)[:, :3].astype(np.float32) / 255.0
+
+        if self.view.part_ranges is not None and self.part_shapes:
+            # 多部件：合并缓冲里按部件分段写回颜色
+            mesh = self.view.meshes[0]
+            for part_name, start, count, _shown in self.view.part_ranges:
+                rgb = _rgb(_face_colors(self.part_shapes[part_name], name))
+                if rgb is None or len(rgb) != count // 3:
+                    continue
+                mesh["colors"][start:start + count] = np.repeat(rgb, 3, axis=0)
+        else:
+            source = self.frame_fn if self.frame_fn is not None else (lambda _index: self.shape)
+            for index, mesh in enumerate(self.view.meshes):
+                rgb = _rgb(_face_colors(source(index), name))
+                if rgb is not None and len(rgb) == len(mesh["points"]) // 3:
+                    mesh["colors"] = np.repeat(rgb, 3, axis=0)
         if self.view.vertex_buffer is not None:
             self.view.vertex_buffer.bind()
             self.view._upload()
@@ -777,9 +1066,15 @@ class ViewerWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 文件
     def _current_source(self):
-        """当前要导出的几何：动画取当前帧（重新求值一次），静态取原始几何。"""
+        """当前要导出的几何：动画取当前帧，多部件取可见部件的并集，否则原始几何。"""
         if self.frame_fn is not None:
             return self.frame_fn(self.index)
+        if self.part_shapes and isinstance(self.view, Interactive3D) and self.view.part_ranges:
+            import moz_openscad as moz
+            visible = [self.part_shapes[name] for name, _start, _count, shown in self.view.part_ranges if shown]
+            if not visible:
+                raise RuntimeError("没有可见部件可导出")
+            return visible[0] if len(visible) == 1 else moz.union(*visible)
         return self.shape
 
     def _export_stl(self):
@@ -842,6 +1137,44 @@ class ViewerWindow(QMainWindow):
             self.timer.start()
         QMessageBox.information(self, "导出完成", f"已保存 {total} 张到 {directory}")
 
+    def _export_gif(self):
+        """把动画逐帧截图导出为 GIF。Pillow 是**可选**依赖，缺了会提示（不硬引）。"""
+        if not self.frames:
+            QMessageBox.information(self, "导出 GIF", "GIF 需要动画模式（多帧）。")
+            return
+        try:
+            from PIL import Image
+        except ImportError:
+            QMessageBox.information(
+                self, "导出 GIF",
+                "需要 Pillow：pip install Pillow\n（或先用「导出整个视图序列 PNG」拿 PNG 序列）")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "导出 GIF", "animation.gif", "GIF (*.gif)")
+        if not path or not hasattr(self.view, "grabFramebuffer"):
+            return
+        was_playing = self.timer.isActive()
+        if was_playing:
+            self.timer.stop()
+        frames = []
+        try:
+            for index in range(self.frames):
+                self._goto(index)
+                QApplication.processEvents()
+                image = self.view.grabFramebuffer().convertToFormat(QImage.Format_RGBA8888)
+                raw = bytes(image.constBits())
+                pil = Image.frombytes("RGBA", (image.width(), image.height()), raw, "raw", "RGBA",
+                                      image.bytesPerLine())
+                frames.append(pil.convert("P", palette=Image.ADAPTIVE))
+            frames[0].save(path, save_all=True, append_images=frames[1:],
+                           duration=max(20, int(1000.0 / self.fps)), loop=0, disposal=2)
+        except Exception as exc:  # 导出失败不该让窗口崩
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+        finally:
+            if was_playing:
+                self.timer.start()
+        QMessageBox.information(self, "导出完成", f"已保存 {len(frames)} 帧到 {path}")
+
     def _about(self):
         from PySide6 import __version__ as pyside_version
         QMessageBox.about(
@@ -870,6 +1203,19 @@ def show_animation(frame_fn, frames, fps=8.0, title="moz animation", width=900, 
     app = QApplication.instance() or QApplication(sys.argv)
     window = ViewerWindow(title=title, width=width, height=height)
     window.set_animation(frame_fn, frames, fps)
+    window.show()
+    app.exec()
+
+
+def show_parts(parts, title="moz parts", width=1100, height=700):
+    """打开窗口显示多个命名部件。
+
+    parts 是 ``(name, Shape)`` 序列或 ``{name: Shape}`` 字典；右侧列表可勾选显示/隐藏，
+    左键单击会报告点到的部件名与世界坐标。
+    """
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = ViewerWindow(title=title, width=width, height=height)
+    window.set_parts(parts)
     window.show()
     app.exec()
 

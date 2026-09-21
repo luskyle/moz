@@ -196,6 +196,10 @@ def show_animation(
     frame_fn: Callable[[int], Shape], frames: int, fps: float = ...,
     title: str = ..., width: int = ..., height: int = ...,
 ) -> None: ...
+def show_parts(
+    parts: Sequence[tuple[str, ShapeLike]] | dict[str, ShapeLike],
+    title: str = ..., width: int = ..., height: int = ...,
+) -> None: ...
 
 # --- 形状原语 ---
 def cube(size: Any = ..., center: bool = ...) -> Shape: ...
