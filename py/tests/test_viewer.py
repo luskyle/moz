@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+np = pytest.importorskip("numpy")
 viewer = pytest.importorskip("moz_viewer")
 
 
@@ -115,7 +116,6 @@ def test_color_schemes_enumerated(qapp):
 
 
 def test_set_colorscheme_updates_mesh_colors(moz, qapp):
-    import numpy as np
     w = viewer.ViewerWindow()
     w.set_animation(lambda i: moz.Shape(f"translate([0, 0, {i * 2}]) cube(2);"), 3, 3.0)
     before = w.view.meshes[0]["colors"].copy()
@@ -123,3 +123,46 @@ def test_set_colorscheme_updates_mesh_colors(moz, qapp):
     assert not np.array_equal(before, w.view.meshes[0]["colors"])
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
+
+
+def test_engine_camera_front_view(moz, qapp):
+    """前视图（eye 在 -Y、up=+Z）应精确对应上游的 $vpr = [90, 0, 0]。"""
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(10, center=True))
+    w.view.set_view(-90.0, 0.0)
+    vpr, vpt, vpd, vpf = w.view.engine_camera()
+    assert vpr == pytest.approx([90.0, 0.0, 0.0], abs=1e-6)
+    assert vpt == pytest.approx([0.0, 0.0, 0.0], abs=1e-6)
+    assert vpd == pytest.approx(5.0 * 3.0, rel=1e-6)   # radius(5) × distance(3)
+    assert vpf == pytest.approx(45.0)
+
+
+def test_engine_camera_ortho_field_of_view(moz, qapp):
+    """正交模式用等效视场角 2·atan(0.55)（与 _projection 的 half=distance*0.55 对齐）。"""
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(10, center=True))
+    w.view.orthographic = True
+    _, _, _, vpf = w.view.engine_camera()
+    assert vpf == pytest.approx(float(np.degrees(2.0 * np.arctan(0.55))), rel=1e-9)
+
+
+def test_engine_camera_tracks_pan_and_distance(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(10, center=True))
+    base = w.view.engine_camera()
+    w.view.target = w.view.target + np.array([0.5, 0.0, 0.0])
+    w.view.distance *= 2.0
+    moved = w.view.engine_camera()
+    assert moved[1][0] > base[1][0]                  # vpt 跟着 target 走
+    assert moved[2] == pytest.approx(base[2] * 2.0)  # vpd 跟着 distance 走
+
+
+def test_2d_view_is_interactive(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.eval_text("circle(10);"))
+    assert type(w.view).__name__ == "Interactive2D"
+    assert w.view.scene() is not None and w.view.scene().items()
+    scale_before = w.view.transform().m11()
+    w.view.scale(1.5, 1.5)
+    assert w.view.transform().m11() > scale_before
+    w.view.reset_view()          # 「重置视角」对 2D 也要能用（不崩）

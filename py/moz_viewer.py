@@ -11,13 +11,22 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QMatrix4x4, QOpenGLFunctions, QVector3D
+from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence, QMatrix4x4, QOpenGLFunctions, QPainter, QVector3D
 from PySide6.QtOpenGL import QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLVertexArrayObject
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtSvgWidgets import QSvgWidget
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStatusBar,
+    QApplication,
+    QFileDialog,
+    QGraphicsScene,
+    QGraphicsView,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressDialog,
+    QStatusBar,
 )
 
 # 未着色对象在预览器里的默认材质色（与 OpenSCAD 默认配色同色系）
@@ -140,6 +149,43 @@ class Interactive3D(QOpenGLWidget):
 
     def _normalized(self, mesh):
         return (mesh["points"] - self.center) / self.radius
+
+    def engine_camera(self):
+        """把当前视角换算成引擎相机，使引擎渲染与窗口视角一致。
+
+        预览器是 ``lookAt(eye, target, +Z)``；上游是 ``R = Rx(rx)·Ry(ry)·Rz(rz)`` 之后从
+        ``(0, -dist, 0)`` 用 ``+Z`` 观察（即 ``M = L·R``，``L`` 是那次 lookAt）。
+        两者的旋转部分相等：``R = Lᵀ·M_ours``，再从 ``R`` 取 ZYX 欧拉角。
+        ``vpr = (90 - rx, -ry, -rz)``（见上游 ``Camera::setVpr``）。
+
+        返回 ``(vpr, vpt, vpd, vpf)``：坐标都换算回**世界单位**（引擎渲染的是原始模型，
+        预览器则把网格归一化到单位半径）。正交模式下等效视场角取 ``2·atan(0.55)``，
+        与 ``_projection`` 里的 ``half = distance * 0.55`` 对齐。
+        """
+        eye = self.target + self.distance * self._eye_direction()
+        # 归一化空间 → 世界空间
+        eye_w = self.center + self.radius * eye
+        target_w = self.center + self.radius * self.target
+        up = np.array([0.0, 0.0, 1.0])
+
+        z = eye_w - target_w
+        z = z / np.linalg.norm(z)
+        x = np.cross(up, z)
+        x = x / np.linalg.norm(x)
+        y = np.cross(z, x)
+        m_ours = np.vstack([x, y, z])                      # lookAt 的旋转部分（行 = 相机轴）
+
+        l_rot = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+        rotation = l_rot.T @ m_ours                        # R = Lᵀ · M
+        # R = Rx(a)Ry(b)Rz(c) 的欧拉角
+        b = float(np.arcsin(max(-1.0, min(1.0, rotation[0, 2]))))
+        a = float(np.arctan2(-rotation[1, 2], rotation[2, 2]))
+        c = float(np.arctan2(-rotation[0, 1], rotation[0, 0]))
+        object_rot = np.degrees([a, b, c])
+        vpr = [90.0 - object_rot[0], -object_rot[1], -object_rot[2]]
+
+        vpf = float(np.degrees(2.0 * np.arctan(0.55))) if self.orthographic else 45.0
+        return vpr, [float(value) for value in target_w], float(self.radius * self.distance), vpf
 
     def _upload(self):
         """把当前帧的顶点数据写进 vertex_buffer（**要求调用方已 bind**）。
@@ -280,11 +326,39 @@ class Interactive3D(QOpenGLWidget):
         self.update()
 
 
-class Interactive2D(QSvgWidget):
+class Interactive2D(QGraphicsView):
+    """2D 视图：SVG 矢量图，滚轮缩放、左键拖动平移、双击「适应窗口」。"""
+
     def __init__(self, shape, parent=None):
         super().__init__(parent)
         self.setMinimumSize(640, 480)
-        self.load(shape.export_bytes("svg"))
+        self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self._renderer = QSvgRenderer(QByteArray(shape.export_bytes("svg")))
+        self._item = QGraphicsSvgItem()
+        self._item.setSharedRenderer(self._renderer)
+        scene = QGraphicsScene(self)
+        scene.addItem(self._item)
+        self.setScene(scene)
+        self.setSceneRect(self._item.boundingRect())
+        self.fit_to_window()
+
+    def fit_to_window(self):
+        """缩放到刚好显示整张图。"""
+        if not self._item.boundingRect().isEmpty():
+            self.fitInView(self._item, Qt.KeepAspectRatio)
+
+    def reset_view(self):
+        self.resetTransform()
+        self.fit_to_window()
+
+    def wheelEvent(self, event):
+        factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
+        self.scale(factor, factor)
+
+    def mouseDoubleClickEvent(self, event):
+        self.fit_to_window()
 
 
 class ViewerWindow(QMainWindow):
@@ -321,7 +395,7 @@ class ViewerWindow(QMainWindow):
             self.status_hint = "左键旋转 | 右键平移 | 滚轮缩放 | 颜色来自 color()"
         elif shape.dimension == 2:
             self.view = Interactive2D(shape, self)
-            self.status_hint = "SVG 矢量视图"
+            self.status_hint = "SVG 矢量视图 | 滚轮缩放 | 左键拖动平移 | 双击适应窗口"
         else:
             self.view = QLabel("空几何")
             self.status_hint = "空几何"
@@ -341,16 +415,42 @@ class ViewerWindow(QMainWindow):
         self.shape = None
         meshes = []
         first = None
+        # 预计算是帧数与求值次数的乘积，大模型会慢 —— 给进度并可取消。
+        # （不做「按需求值 + LRU」：各帧包围盒需要在取景前统一，否则逐帧重新居中会抖动。）
+        progress = QProgressDialog("正在预计算动画帧 …", "取消", 0, frames, self)
+        progress.setWindowTitle("moz viewer")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+        cancelled = False
         for i in range(frames):
-            self.statusBar().showMessage(f"预计算帧 {i + 1}/{frames} …")
+            progress.setValue(i)
+            progress.setLabelText(f"正在预计算动画帧 {i + 1}/{frames} …")
             QApplication.processEvents()
+            if progress.wasCanceled():
+                cancelled = True
+                break
             shape = frame_fn(i)
             if first is None:
                 first = shape
                 if shape.is_empty or shape.dimension != 3:
+                    progress.close()
                     self.set_shape(shape)  # 非 3D 没法在 GL 里动画，退回静态
                     return
             meshes.append(_mesh_from_shape(shape))
+        progress.setValue(frames)
+        progress.close()
+        if cancelled:
+            self.status_hint = f"已取消（预计算了 {len(meshes)}/{frames} 帧）"
+            if meshes:
+                self.view = Interactive3D(meshes, self)
+                self.setCentralWidget(self.view)
+                self.frames = len(meshes)
+                self._refresh_status()
+            else:
+                self.view = QLabel("已取消")
+                self.setCentralWidget(self.view)
+                self._refresh_status()
+            return
         if not meshes:
             self.set_shape(first)
             return
@@ -463,7 +563,7 @@ class ViewerWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 视图
     def _reset_view(self):
-        if isinstance(self.view, Interactive3D):
+        if isinstance(self.view, Interactive3D | Interactive2D):
             self.view.reset_view()
 
     def _set_preset(self, yaw, pitch):
@@ -522,9 +622,15 @@ class ViewerWindow(QMainWindow):
             return
         try:
             source = self._current_source()
-            width = self.view.width() if self.view is not None and hasattr(self.view, "width") else 0
-            height = self.view.height() if self.view is not None and hasattr(self.view, "height") else 0
-            source.render_png(path, width, height)  # 引擎渲染，保留 color()
+            options = {}
+            if isinstance(self.view, Interactive3D):
+                # 把窗口视角换算成引擎相机，导出的图与所见一致
+                vpr, vpt, vpd, vpf = self.view.engine_camera()
+                options = dict(vpr=vpr, vpt=vpt, vpd=vpd, vpf=vpf,
+                               projection="ortho" if self.view.orthographic else "perspective")
+            width = self.view.width() if hasattr(self.view, "width") else 0
+            height = self.view.height() if hasattr(self.view, "height") else 0
+            source.render_png(path, width, height, **options)  # 引擎渲染，保留 color()
         except Exception as exc:
             QMessageBox.warning(self, "渲染失败", str(exc))
 
