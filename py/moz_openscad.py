@@ -200,15 +200,16 @@ class Shape:
     def minkowski(self, *others):
         return _compose("minkowski", self, *others)
 
-    def linear_extrude(self, height, center=False, scale=None, twist=None, slices=None, convexity=None):
+    def linear_extrude(self, height, center=False, scale=None, twist=None, slices=None,
+                       convexity=None, fn=None, fa=None, fs=None):
         return linear_extrude(self, height, center=center, scale=scale, twist=twist,
-                              slices=slices, convexity=convexity)
+                              slices=slices, convexity=convexity, fn=fn, fa=fa, fs=fs)
 
-    def rotate_extrude(self, angle=360, convexity=None):
-        return rotate_extrude(self, angle=angle, convexity=convexity)
+    def rotate_extrude(self, angle=360, convexity=None, fn=None, fa=None, fs=None):
+        return rotate_extrude(self, angle=angle, convexity=convexity, fn=fn, fa=fa, fs=fs)
 
-    def offset(self, delta):
-        return Shape(f"offset(delta = {_format_open_scad_value(delta)}) {_as_source(self)}")
+    def offset(self, r=None, delta=None, chamfer=None, fn=None, fa=None, fs=None):
+        return offset(self, r=r, delta=delta, chamfer=chamfer, fn=fn, fa=fa, fs=fs)
 
     def projection(self, cut=False):
         return Shape(f"projection(cut = {_format_open_scad_value(cut)}) {_as_source(self)}")
@@ -671,11 +672,11 @@ class Part:
     def export_bytes(self, fmt):
         return self.shape.export_bytes(fmt)
 
-    def render_png(self, path, width=800, height=600):
-        return self.shape.render_png(path, width, height)
+    def render_png(self, path, width=0, height=0, **options):
+        return self.shape.render_png(path, width, height, **options)
 
-    def render_png_bytes(self, width=800, height=600):
-        return self.shape.render_png_bytes(width, height)
+    def render_png_bytes(self, width=0, height=0, **options):
+        return self.shape.render_png_bytes(width, height, **options)
 
     def show(self, title="moz OpenSCAD", width=900, height=650):
         self.shape.show(title=title, width=width, height=height)
