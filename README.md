@@ -9,6 +9,7 @@
 > * 自由曲面：汽车外壳、人脸、螺旋桨叶片；
 > * 装配关系与运动：间隙、配合、行程；
 > * 制造要求：公差、表面粗糙度、材料、热处理。
+
 >
 > 所以自然语言适合说“要什么”，不适合直接定义“几何长什么样”。
 >
@@ -43,3 +44,41 @@
 > 我想设计一个一体化的解决方案，辅助我更加轻松地完成结构与外观设计。
 >
 > 作者：luskyle
+
+## Python 直接建模
+
+Python 示例不需要先写 `.scad` 文件。示例模块提供 `build()`，直接组合 `moz_openscad` 的基本体、布尔运算和变换：
+
+```python
+import moz_openscad as moz
+
+def build():
+	return moz.difference(moz.cube(20, center=True), moz.sphere(12))
+```
+
+当前已经提供直接 Python 构造版本的示例：
+
+- `py/examples/Basics/CSG.py`
+- `py/examples/Basics/CSG-modules.py`
+
+运行示例仍然可以导出 STL，但导出只是交付格式，不是建模过程：
+
+```bash
+PYTHONPATH=py python3 py/examples/Basics/CSG.py
+```
+
+## 界面预览
+
+可以直接把提供 `build()` 的 Python 示例交给预览器。预览器调用 native OpenSCAD 的 PNG 渲染接口，在窗口中显示结果，不需要先导出或打开 STL：
+
+```bash
+PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py
+```
+
+窗口中的 `Reload` 会重新执行 `build()` 并刷新预览。当前预览器基于 Python 内置 `tkinter`，因此需要系统安装 Tk：
+
+```bash
+sudo apt install python3-tk
+```
+
+其余按原目录归类的入口目前仍保留为兼容回归入口，通过 `moz.eval_file()` 验证原始 OpenSCAD 示例。它们可以继续逐个迁移成 `build()` 形式，迁移后即可直接交给 `moz_viewer.py` 预览。

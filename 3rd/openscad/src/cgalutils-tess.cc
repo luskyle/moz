@@ -19,7 +19,13 @@ struct FaceInfo {
   bool in_domain() { return nesting_level%2 == 1; }
 };
 
+// CGAL >= 5.4 removed Triangulation_2_filtered_projection_traits_3;
+// Triangulation_2_projection_traits_3 is the filtered implementation since 5.4.
+#if CGAL_VERSION_NR >= CGAL_VERSION_NUMBER(5,4,0)
+typedef CGAL::Triangulation_2_projection_traits_3<K> Projection;
+#else
 typedef CGAL::Triangulation_2_filtered_projection_traits_3<K> Projection;
+#endif
 typedef CGAL::Triangulation_face_base_with_info_2<FaceInfo, K> Fbb;
 typedef CGAL::Triangulation_data_structure_2<
 	CGAL::Triangulation_vertex_base_2<Projection>,

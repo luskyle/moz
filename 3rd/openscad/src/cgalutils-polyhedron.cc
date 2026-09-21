@@ -10,9 +10,12 @@
 #pragma push_macro("NDEBUG")
 #undef NDEBUG
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/number_utils.h>
 #pragma pop_macro("NDEBUG")
 
 #include <boost/range/adaptor/reversed.hpp>
+
+#include <map>
 
 #undef GEN_SURFACE_DEBUG
 namespace /* anonymous */ {
@@ -343,7 +346,26 @@ namespace CGALUtils {
 		sstream.precision(20);
 
     Polyhedron_writer writer;
-    generic_print_polyhedron(sstream, p, writer);
+    // CGAL >= 5.4 removed generic_print_polyhedron (Polyhedron_3_iostream.h deleted);
+    // emit the same output through the writer callbacks manually.
+    writer.write_header(sstream, p.size_of_vertices(), p.size_of_halfedges(), p.size_of_facets());
+    std::size_t vindex = 0;
+    std::map<const typename Polyhedron::Vertex *, std::size_t> vertex_ids;
+    for (auto vit = p.vertices_begin(); vit != p.vertices_end(); ++vit, ++vindex) {
+      const auto &pt = vit->point();
+      writer.write_vertex(CGAL::to_double(pt.x()), CGAL::to_double(pt.y()), CGAL::to_double(pt.z()));
+      vertex_ids[&*vit] = vindex;
+    }
+    writer.write_facet_header();
+    for (auto fit = p.facets_begin(); fit != p.facets_end(); ++fit) {
+      writer.write_facet_begin(fit->facet_degree());
+      typename Polyhedron::Halfedge_around_facet_const_circulator hc = fit->facet_begin();
+      do {
+        writer.write_facet_vertex_index(vertex_ids[&*hc->vertex()]);
+      } while (++hc != fit->facet_begin());
+      writer.write_facet_end();
+    }
+    writer.write_footer();
 		
 		return sstream.str();
 	}

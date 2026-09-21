@@ -691,6 +691,20 @@ if(ENABLE_SPNAV)
 endif()
 
 target_link_libraries(OpenSCAD PRIVATE ${COMMON_LIBRARIES} ${PLATFORM_LIBS})
+
+# moz: OpenSCAD 无 GUI 核心封装为共享库，暴露 C ABI（src/moz/moz_api.h）
+# 供 moz 项目的 Python 绑定（ctypes）调用。与 HEADLESS 可执行共用同一套源。
+add_library(mozopenscad SHARED
+  ${CORE_SOURCES}
+  ${CGAL_SOURCES}
+  ${OFFSCREEN_SOURCES}
+  src/moz/moz_api.cc
+)
+target_compile_definitions(mozopenscad PRIVATE OPENSCAD_NOGUI)
+target_link_libraries(mozopenscad PRIVATE ${COMMON_LIBRARIES} ${PLATFORM_LIBS})
+set_target_properties(mozopenscad PROPERTIES OUTPUT_NAME openscad_moz)
+target_compile_features(mozopenscad PRIVATE cxx_std_14)
+
 if(NOT HEADLESS)
   target_link_libraries(OpenSCAD PRIVATE Qt5::Core Qt5::Widgets Qt5::Multimedia Qt5::OpenGL Qt5::Concurrent Qt5::Network ${QT5QSCINTILLA_LIBRARY} ${Qt5DBus_LIBRARIES} ${Qt5Gamepad_LIBRARIES})
 endif()
@@ -699,4 +713,9 @@ if(INFO)
   include(info)
 endif()
 
-add_subdirectory(tests)
+# moz: tests 目录依赖 MCAD submodule（vendor 副本没有），且针对 OpenSCAD 可执行
+# 而非 mozopenscad 库，默认关闭；构建时 -DBUILD_TESTING=OFF
+option(BUILD_TESTING "Build and register tests" ON)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
