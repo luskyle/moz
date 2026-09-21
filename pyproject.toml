@@ -25,3 +25,20 @@ test = ["pytest>=7"]
 
 [tool.pytest.ini_options]
 testpaths = ["py/tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+# 3rd/ 是 vendored 的 OpenSCAD 源码；py/examples/ 刻意照上游 .scad 的排版（制表符、长行）翻译
+extend-exclude = ["3rd", "build", "py/examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    # 形状原语的可变默认值（size=[1,1,1]）与 SCAD 的签名一致，且从不被修改
+    "B006",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 存根里的长签名不拆行更好读
+"*.pyi" = ["E501"]

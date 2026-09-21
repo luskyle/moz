@@ -62,7 +62,7 @@ docs/                    文档
 | --- | --- |
 | 用 Python 拼模型并导出 STL/3MF/OFF/AMF/DXF/SVG/PDF/PNG | `py/moz_openscad.py` |
 | 交互预览（3D 旋转/缩放，颜色来自 `color()`） | `shape.show()` / `py/moz_viewer.py` |
-| 直接调 C ABI（22 个函数） | `3rd/openscad/src/moz/moz_api.h` |
+| 直接调 C ABI（25 个函数） | `3rd/openscad/src/moz/moz_api.h` |
 | 从引擎里取值（`dxf_dim`/`rands`/`lookup`/`version`…，全精度） | `moz.value()` / `moz.number()` / `moz.vector()` |
 | 逐面颜色（与导出的 STL 三角面一一对应） | `Geometry.face_colors()` |
 | 几何测量（包围盒/体积/表面积/面数/顶点数/质心） | `Geometry.measure` |

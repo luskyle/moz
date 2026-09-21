@@ -68,6 +68,23 @@ int moz_geom_measure(const moz_geom *g, moz_measure *out, char **err);
   `bbox_*`/`centroid` 为 `NaN`。
 - 成功返回 0，失败返回负值并填充 `err`。
 
+## 几何查询
+
+```c
+int moz_geom_contains_point(const moz_geom *g, double x, double y, double z, int *out, char **err);
+int moz_geom_distance_to_surface(const moz_geom *g, double x, double y, double z, double *out, char **err);
+int moz_geom_inertia(const moz_geom *g, double *out, char **err);
+```
+
+- `contains_point`：点是否在实体内（射线奇偶法，多个射线方向轮换以避开退化）。2D / 空几何为 0。
+  **恰好落在表面/顶点上**的点结果不保证。
+- `distance_to_surface`：点到三角面的最短距离；空几何/2D 返回负值并报错。
+- `inertia`：惯性张量（**单位密度、关于质心**），`out` 为 9 个 double（行优先）。按有符号四面体
+  累加二阶矩再搬质心；立方体边长 10 → 对角 16666.67（= m·s²/6）。2D / 空几何返回负值并报错。
+
+**这三个查询、`moz_geom_measure`、`moz_geom_triangles`、`moz_geom_face_colors` 共用同一次三角化**：
+网格缓存在句柄里（句柄求值后几何不变，无需失效），所以连续调用不会重复三角化。
+
 ## 取值
 
 ```c

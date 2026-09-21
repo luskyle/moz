@@ -15,31 +15,36 @@
 
 ## 1. 工程化（目前最薄弱，收益最高）
 
-- [x] **测试**：新增 `py/tests/`（pytest，61 个用例），覆盖 measure 数值、eval/export 往返、取值通道、
+- [x] **测试**：`py/tests/`（pytest，95 个用例），覆盖 measure/查询数值、eval/export 往返、取值通道、
       动画帧、库路径、网格/颜色、`Shape` 缓存、错误路径、viewer 逻辑（不 show 窗口）。
-- [x] **CI**：`.github/workflows/ci.yml` —— 装依赖 → 构建 `.so` → 跑 pytest → 跑 48 示例保真度。
-- [ ] **打包**：wheel 不含 `libmozopenscad.so`，装完必须设 `MOZ_OPENSCAD_LIB` / `MOZ_OPENSCAD_RESOURCE_DIR`。
-      待定：把 `.so` 打进平台 wheel，还是在文档里把「安装后配置」写清。
-- [ ] **lint/format**：加 ruff 配置（`pyproject.toml` 里目前没有）。
+- [x] **CI**：`.github/workflows/ci.yml` —— 装依赖 → 构建 `.so` → `ruff check` → pytest → 48 示例保真度。
+- [x] **打包**：**决定不把 `.so` 打进平台 wheel**（依赖 CGAL/OpenCSG/Qt，需 manylinux 与多套 wheel，
+      收益小于维护成本）；改为在 [build.md](build.md) 写清「安装后配置」。
+- [x] **lint/format**：`pyproject.toml` 加 `[tool.ruff]`（E/F/W/I/UP/B，排除 `3rd`/`build`/`py/examples`），
+      `ruff check .` 已全绿，并接入 CI。
 
 ## 2. API 与性能
 
 - [x] `moz_geom_triangles`：直取三角面顶点数组，viewer 不再解析 STL 字节。
 - [x] `moz_geom_face_colors_ex`：给逐面颜色加 `colorscheme` 参数（GL 预览切换配色的前提）。
 - [x] `Shape` 惰性求值缓存（按 `variables` 快照失效）。
-- [ ] `moz_geom_measure` 每次重新三角化 Nef —— 与 export/face_colors 共享一次三角化（内部缓存）。
-- [ ] 动画预计算是 `frames × 求值`；大模型慢 —— 按需求值 + LRU 缓存，或可取消的后台预计算。
-- [ ] 并发：全局递归互斥 → 单线程串行。服务化前必须先解决引擎静态全局状态（parser/builtins/字体缓存）。
+- [x] **三角化缓存**：measure / triangles / face_colors / 几何查询共用一次三角化（缓存在句柄里）。
+- [x] 动画预计算：改为**带进度且可取消**。不做「按需求值 + LRU」——取景前必须知道全部帧的包围盒，
+      否则逐帧重新居中会抖动（见 [viewer.md](viewer.md)）。
+- [x] 并发：**明确不做**（引擎的 parser/builtins/字体缓存/`RenderSettings` 都是进程级静态状态，
+      改线程安全等于重写上游；服务化只能多进程）。理由记在 [limitations.md](limitations.md)。
 
 ## 3. 新 API（延续 C ABI 补全）
 
 - [x] 相机覆盖：`moz_render_options` 增加 `has_camera`/`vpr`/`vpt`/`vpd`/`vpf`/`projection`，
       渲染不再只能靠模型里的 `$vpr`（Python：`render_png(..., vpr=..., vpd=..., projection="ortho")`）。
-- [ ] viewer 把当前视角同步给引擎再导出 PNG。预览器用的是 **Y-up** 且把网格归一化到单位半径，
-      要像素级对齐需处理 Y-up/Z-up 与尺度映射（相机覆盖本身已完成，剩的是这层映射）。
-- [ ] 几何查询扩展：惯性矩、凸包、点包含（point-in-solid）、最近点/距离、截面 slice。
+- [x] viewer 视角同步：`Interactive3D.engine_camera()` 把窗口视角精确换算成 `$vpr/$vpt/$vpd/$vpf`
+      + 投影方式（`R = Lᵀ·M_lookAt` 反解欧拉角），引擎导出的 PNG 与所见一致（实测轮廓比 0.5% 内）。
+- [x] 几何查询：点包含 `contains_point`、点到表面距离 `distance_to_surface`、惯性张量 `inertia`
+      （凸包已有建模原语 `moz.hull`）。
+- [ ] 截面 `slice`（切平面 → 2D 轮廓）—— 需要平面与 Nef 求交并产出新句柄，未做。
 - [x] `resize()` 封装（零 C++ 改动）+ 修饰符助手 `background`/`highlight`/`only`/`disable`（`%`/`#`/`!`/`*`）。
-- [ ] 2D 交互：viewer 的 2D 目前只是静态 SVG，无缩放/平移/尺寸标注。
+- [x] 2D 交互：viewer 的 2D 改为 `QGraphicsView`（滚轮缩放、拖动平移、双击适应窗口）。
 - [x] **类型存根 `moz_openscad.pyi`**（对应 `__init__.pyi`）；`mypy` 校验通过。
 
 ## 4. viewer 增强

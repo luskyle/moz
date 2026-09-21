@@ -24,13 +24,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python dependencies
-        run: pip install numpy pytest PySide6
+        run: pip install numpy pytest PySide6 ruff
 
       - name: Build the geometry core
         run: JOBS=$(nproc) bash scripts/build_moz_openscad.sh
 
+      - name: Lint
+        run: ruff check .
+
       - name: Unit tests
-        run: PYTHONPATH=py python3 -m pytest
+        run: python3 -m pytest
 
       - name: Example fidelity (48 upstream examples)
         run: PYTHONPATH=py python3 py/verify_examples.py

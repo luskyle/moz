@@ -191,6 +191,11 @@ moz.show_animation(lambda i: build(i / 24), frames=24, fps=12)   # 在窗口里�
 **帮助**（关于）。快捷键：`Space` 播放/暂停、`←`/`→` 逐帧、`Home` 重置视角。
 预览器跟随 **OpenSCAD 的 Z-up**（屏幕上方是 +Z）。
 
+2D 几何是**可交互**的：滚轮缩放、左键拖动平移、双击（或 `Home`）适应窗口。
+
+「导出当前帧 PNG（引擎渲染）」会把窗口视角换算成引擎相机（`engine_camera()` → `$vpr/$vpt/$vpd/$vpf`
++ 投影方式），所以导出的图与所见一致；「导出整个视图序列 PNG」则直接抓 GL 画面。
+
 `show_animation` 打开窗口时一次性预计算全部帧（各帧共用同一套居中/缩放，模型才是「动」而不是抖动），
 播放用定时器换缓冲。细节见 [viewer.md](viewer.md)。
 
@@ -234,6 +239,14 @@ m.centroid             # (x, y, z)：3D 体积质心 / 2D 面积质心；空几�
 ```python
 tris = g.triangles()          # array('f')，每 9 个 float 一个三角面（3 顶点，世界坐标）
 # numpy 用法：np.frombuffer(g.triangles(), dtype=np.float32).reshape(-1, 3)
+```
+
+几何查询（与 measure/triangles/face_colors 共用同一次三角化）：
+
+```python
+g.contains_point(0, 0, 0)        # 点是否在实体内（2D/空几何恒 False；表面点不保证）
+g.distance_to_surface(6, 0, 0)   # 点到表面的最短距离；2D/空几何抛 OpenSCADError
+g.inertia()                      # 3×3 惯性张量（单位密度、关于质心）；2D/空几何抛错
 ```
 
 ```python

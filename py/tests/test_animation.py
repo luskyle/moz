@@ -39,7 +39,7 @@ def test_borrowed_geometry_invalid_after_callback(moz):
     holder = {}
     moz.eval_animation("cube(1);", 1, callback=lambda i, g: holder.setdefault("g", g))
     with pytest.raises(moz.OpenSCADError):
-        holder["g"].measure
+        _ = holder["g"].measure   # 触发 OpenSCADError（句柄已在回调后释放）
 
 
 def test_invalid_arguments(moz):

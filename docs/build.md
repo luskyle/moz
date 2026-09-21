@@ -51,6 +51,29 @@ mv -f "$OUT/.libmozopenscad.so.tmp" "$OUT/libmozopenscad.so"
 实测踩过一次：一个跑了 7 分钟的验证进程在库里被覆盖后 `总线错误（核心已转储）`。
 原子替换后，已加载旧库的进程继续用旧 inode，重构建不会打断它。
 
+## 安装（pip / wheel）与「安装后配置」
+
+**决定：把 `.so` 打进平台 wheel 暂不做**，改为在文档里把安装后的配置写清（理由：`.so` 依赖
+CGAL/OpenCSG/Qt 等系统库，按平台打包 wheel 需要 manylinux 镜像与多套 wheel，收益小于维护成本）。
+
+`pip install -e .` / `pip install .` 只会装 Python 代码（`moz_openscad`、`moz_viewer`、`demo`
+与类型存根 `moz_openscad.pyi`），**不含** `libmozopenscad.so`。装完仍需：
+
+| 需要什么 | 怎么给 |
+| --- | --- |
+| 几何库 | 先 `bash scripts/build_moz_openscad.sh`；不在仓库布局时用 `MOZ_OPENSCAD_LIB` 指到那个 `.so` |
+| 资源目录（配色等） | 仓库里会自动定位 `3rd/openscad`；装到别处后需 `MOZ_OPENSCAD_RESOURCE_DIR` |
+| `use <MCAD/...>` | 设 `OPENSCADPATH`（或把 `libraries` 目录加进库搜索路径，见 `moz.add_library_path`） |
+
+库路径解析顺序见 `moz_openscad.py` 的 `_find_lib()`：`MOZ_OPENSCAD_LIB` → 模块同目录 → `../build/lib/`。
+
+## 测试与 lint
+
+```bash
+python3 -m pytest          # 单元测试（py/tests/，需 pytest；无 .so 时整体 skip）
+ruff check .               # lint（配置见 pyproject.toml）
+```
+
 ## 运行时环境变量
 
 | 变量 | 作用 |

@@ -213,8 +213,8 @@ def verify(category, name):
 
         scale = max(max(abs(v) for v in n_lo + n_hi), 1.0)
         dv, da = _relative(n_vol, p_vol), _relative(n_area, p_area)
-        db = max(max(abs(a - b) for a, b in zip(n_lo, p_lo)),
-                 max(abs(a - b) for a, b in zip(n_hi, p_hi)))
+        db = max(max(abs(a - b) for a, b in zip(n_lo, p_lo, strict=False)),
+                 max(abs(a - b) for a, b in zip(n_hi, p_hi, strict=False)))
         if dv <= VOLUME_RTOL and da <= AREA_RTOL and db <= BBOX_RTOL * scale:
             return "OK", (f"{label}: 实体一致（{n_count}/{p_count} 个三角面，三角化不同；"
                           f"体积差 {dv:.1e}，表面积差 {da:.1e}）")
