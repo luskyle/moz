@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ flex bison \
+            libcgal-dev libgmp-dev libmpfr-dev libopencsg-dev libglew-dev \
+            libdouble-conversion-dev libzip-dev lib3mf-dev libgettextpo-dev \
+            libglib2.0-dev libcairo2-dev libfreetype-dev libfontconfig1-dev \
+            libharfbuzz-dev libxml2-dev qtbase5-dev libeigen3-dev libboost-all-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install numpy pytest PySide6
+
+      - name: Build the geometry core
+        run: JOBS=$(nproc) bash scripts/build_moz_openscad.sh
+
+      - name: Unit tests
+        run: PYTHONPATH=py python3 -m pytest
+
+      - name: Example fidelity (48 upstream examples)
+        run: PYTHONPATH=py python3 py/verify_examples.py
