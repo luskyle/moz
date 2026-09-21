@@ -18,6 +18,7 @@
 | --- | --- |
 | `moz/measure.py` | `Geometry.measure`（包围盒/体积/表面积/面数/顶点数/质心）、导出选项、`add_library_path`/`library_paths` |
 | `moz/animation.py` | **在窗口里播放动画**（`moz.show_animation`）+ `--export` 用 `moz.eval_animation` 逐帧导出；含 `$t` 用法陷阱的说明 |
+| `moz/parts.py` | **多部件装配视图**（`moz.show_parts`）：右侧列表可显隐部件，左键单击点选报告部件名 |
 
 `measure.py` 支持 `--no-show`（不弹窗口，只打印）；`animation.py` 默认播放，`--no-show --export`
 则只导出。便于无显示环境跑。
