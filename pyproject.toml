@@ -14,8 +14,15 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "py"}
-py-modules = ["moz_openscad", "moz_viewer"]
+py-modules = ["moz_openscad", "moz_viewer", "demo"]
 
 [project.scripts]
 moz-demo = "demo:main"
 moz-viewer = "moz_viewer:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["py/tests"]
+addopts = "-q"
