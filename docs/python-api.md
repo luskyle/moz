@@ -8,8 +8,9 @@ import moz_openscad as moz
 `.dimension` / `.export()` / `.render_png()` 这些访问才真正调引擎求值。
 因此：
 
-- 同一个 `Shape` 每次访问属性都会**重新求值**（没有几何缓存）——重复用同一个模型时，
-  自己把它 `eval()` 成一个 `Geometry` 再复用，或直接把导出的结果留着。
+- 同一个 `Shape` 有**惰性求值缓存**：第一次访问 `.dimension` / `.measure` / `.export()` / `.triangles()`
+  等才真正求值，之后复用同一个几何句柄（改 `shape.variables` 会自动失效）。要跨多个 `Shape`
+  复用同一份几何，仍可显式 `.eval()` 成 `Geometry`。
 - **不要做「等价简化」**。例如把 `union(a, b)` 改写成「反正一样」的另一种写法、
   把 `difference` 的层数压平、给 `linear_extrude` 补默认参数，都可能改变最终的网格
   （原因见 [scad-semantics.md](scad-semantics.md)）。
@@ -114,7 +115,9 @@ m = g.measure        # 几何测量快照：bbox / volume / area / facets / vert
 g.export("binstl", "out.stl")
 data = g.export_bytes("3mf")
 png  = g.render_png_bytes(400, 300, colorscheme="Tomorrow")
-colors = g.face_colors()      # 4 字节/面，与 export_bytes("binstl") 的三角面一一对应
+colors = g.face_colors()      # 4 字节/面（RGBA）；顺序与 export_bytes("binstl")/triangles() 一一对应
+colors = g.face_colors("Tomorrow")   # 指定配色（未着色对象取该配色的材质色）
+tris   = g.triangles()        # array('f')：每 9 个 float 一个三角面（直取网格，免于解析 STL）
 g.log                         # echo + 警告（与 OpenSCAD 控制台文本一致）
 g.take_log()                  # 同上，读取后清空
 g.show()                      # 打开预览器（同 Shape.show()）
@@ -122,7 +125,7 @@ g.close()                     # 也可用 with 语句
 ```
 
 `SHAPE` 与 `GEOMETRY` 的关系：`Shape.export()` / `.dimension` 等内部都是
-`self._geometry()`（= 重新求值）再委托给 `Geometry`。
+`self._geometry()`（首次求值后缓存）再委托给 `Geometry`。
 
 `Shape` 还提供 `source`（拼出来的 SCAD 源码）、`eval(**variables)`（显式求值成 `Geometry`）、
 `show()`（打开预览器）、以及同名的方法式写法 `shape.union(...)` / `shape.translate(...)` /
@@ -213,7 +216,14 @@ m.centroid             # (x, y, z)：3D 体积质心 / 2D 面积质心；空几�
 
 3D 用与 `export_bytes("binstl")` **同一条三角化路径**的网格（口径与导出一致），
 2D 用多边形轮廓（鞋带公式 + 面积质心）。空几何的 `volume`/`area` 为 0，
-`bbox`/`centroid` 为 `nan`。`Shape.measure` / `Part.measure` 同理（每次访问会重新求值）。
+`bbox`/`centroid` 为 `nan`。`Shape.measure` / `Part.measure` 同理（同一 `Shape` 只求值一次，见开头的心智模型）。
+
+网格直取（免于解析 STL 字节）：
+
+```python
+tris = g.triangles()          # array('f')，每 9 个 float 一个三角面（3 顶点，世界坐标）
+# numpy 用法：np.frombuffer(g.triangles(), dtype=np.float32).reshape(-1, 3)
+```
 
 ```python
 moz.eval_text("difference() { cube(20, center=true); sphere(12); }").measure.volume

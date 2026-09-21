@@ -153,6 +153,27 @@ OpenCSG 预览里各基本体分别着色的行为一致（`difference` 的切�
 预览器用它给 GL 网格上色（见 [viewer.md](viewer.md)）。实测开销：1.6k~15.5k 面时
 连同 STL 导出共 0.08~1.13 s（远小于 CGAL 求值本身）。
 
+需要按指定配色取色（而非当前配色）时用带配色的版本：
+
+```c
+int moz_geom_face_colors_ex(const moz_geom *g, const char *colorscheme,
+                            unsigned char **out, size_t *out_len, char **err);
+```
+
+它在算色之前先切到 `colorscheme`（未知名字会记一条 `Unknown color scheme` 警告并沿用当前配色），
+其余语义与 `moz_geom_face_colors` 相同。`colorscheme` 为 NULL/"" 时两者等价。
+
+## 三角化网格
+
+```c
+int moz_geom_triangles(const moz_geom *g, float **out, size_t *count, char **err);
+```
+
+直接给出三角面顶点，省去调用方解析 STL 字节。`*out` 为 malloc 缓冲（`moz_bytes_free` 释放），
+每 **9 个 float** 一个三角面（3 个顶点，世界坐标，float32，与 `binstl` 同精度）；`*count` 是三角面数。
+顺序与 `moz_export_bytes(g, "binstl")`、`moz_geom_face_colors` **完全一致**，所以三者可以按下标对齐。
+2D 几何返回 `count == 0`。
+
 ## 渲染
 
 ```c

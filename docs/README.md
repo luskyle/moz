@@ -17,6 +17,7 @@
 | 跑/看/写示例 | [examples.md](examples.md) |
 | 用预览器看模型 | [viewer.md](viewer.md) |
 | 知道现在还不能做什么 | [limitations.md](limitations.md) |
+| 下一步要加/优化什么 | [roadmap.md](roadmap.md) |
 | 第三方组件与许可 | [third-party.md](third-party.md) |
 
 ## 快速开始
@@ -40,6 +41,10 @@ PYTHONPATH=py python3 py/examples/Basics/CSG.py          # 会打开预览器窗
 
 # 4) 校验示例与原生 .scad 是否同一个几何
 PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
+
+# 5) 跑单元测试（pytest；不需要显示器的用例也可跑）
+PYTHONPATH=py python3 -m pytest
 ```
 
 `py/verify_examples.py` 的判定标准见 [verification.md](verification.md)（当前 48 个示例全部通过）。
+单元测试在 `py/tests/`，覆盖测量、导出、取值、动画、库路径、网格颜色、`Shape` 缓存与 viewer 逻辑。

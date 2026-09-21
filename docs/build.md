@@ -1,16 +1,21 @@
 # 构建与运行环境
 
-## 依赖（Ubuntu 22.04）
+## 依赖（Ubuntu 24.04 实测；原文档环境为 22.04）
 
 ```bash
-sudo apt-get install -y libcgal-dev libgmp-dev libmpfr-dev libopencsg-dev \
+sudo apt-get install -y cmake g++ flex bison \
+  libcgal-dev libgmp-dev libmpfr-dev libopencsg-dev \
   libglew-dev libdouble-conversion-dev libzip-dev lib3mf-dev libgettextpo-dev \
   libglib2.0-dev libcairo2-dev libfreetype-dev libfontconfig1-dev libharfbuzz-dev \
   libxml2-dev qtbase5-dev libeigen3-dev libboost-all-dev
 ```
 
-实测环境：CGAL 5.4（系统包）、OpenCSG 已安装并被链接（`ENABLE_OPENCSG` 已定义）、
-fontconfig 可用（`text()` 依赖它找字体）。
+`cmake` / `g++` / `flex` / `bison` 是构建工具链（`flex` 缺失会让 configure 直接报
+`Could NOT find FLEX`）；OpenSCAD 的 lexer/parser 需要后两者。
+
+实测环境（Ubuntu 24.04.5）：CGAL 5.6、OpenCSG 已安装并被链接（`ENABLE_OPENCSG` 已定义）、
+Eigen 3.4.0、Boost 1.83、harfbuzz 8.3、fontconfig 2.15（`text()` 依赖它找字体）。
+原文档的 22.04 / CGAL 5.4 组合未在本机复测——源码里的 CGAL 适配按 **≥ 5.4** 写，两版都应可用。
 
 ## 构建
 
