@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from PySide6.QtCore import Qt
 
 np = pytest.importorskip("numpy")
 viewer = pytest.importorskip("moz_viewer")
@@ -202,3 +203,80 @@ def test_animation_toolbar(moz, qapp):
     assert w.index == 1 and not w.timer.isActive()
     w._on_fps(20.0)
     assert w.timer.interval() == 50
+
+
+def test_edge_geometry(moz, qapp):
+    """立方体（12 个三角面）的去重边数 = 12 条棱 + 6 条面对角线 = 18。"""
+    points = np.asarray(moz.cube(10, center=True).triangles(), dtype=np.float32).reshape(-1, 3)
+    positions = viewer._edge_geometry(points)
+    assert positions is not None and len(positions) == 18 * 2
+    assert viewer._edge_geometry(np.zeros((0, 3), dtype=np.float32)) is None
+
+
+def test_edges_toggle(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(10, center=True))
+    assert w.view.edge_count == 0
+    w.edges_action.setChecked(True)
+    assert w.view.show_edges and w.view.edge_count == 36       # 18 条边 × 2 顶点
+    w.edges_action.setChecked(False)
+    assert not w.view.show_edges and w.view.edge_count == 0
+
+
+def test_pick_hits_and_misses(moz, qapp):
+    """前视图下屏幕中心应打在前表面 (0, -5, 0)；角落应打空。"""
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(10, center=True))
+    w.resize(400, 400)
+    w.view.set_view(-90.0, 0.0)
+    # 未显示窗口时视图尺寸由布局决定，所以按视图自身尺寸取中心
+    center_x, center_y = w.view.width() // 2, w.view.height() // 2
+    hit = w.view.pick(center_x, center_y)
+    assert hit is not None
+    assert hit["world"] == pytest.approx([0.0, -5.0, 0.0], abs=0.05)
+    assert hit["part"] is None
+    assert w.view.pick(1, 1) is None                            # 角落里没有东西
+    w._on_picked(hit)
+    assert "点选：" in w.statusBar().currentMessage()
+
+
+def test_parts_pick_and_visibility(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_parts({"底板": moz.cube([20, 20, 4]), "立柱": moz.translate([0, 0, 12], moz.cylinder(h=20, r=3))})
+    w.resize(400, 400)
+    assert [entry[0] for entry in w.view.part_ranges] == ["底板", "立柱"]
+    assert w.parts_dock is not None and w.parts_list.count() == 2
+    assert not w.anim_menu.isEnabled()
+
+    hit_parts = set()
+    for y in range(10, 400, 20):
+        for x in range(10, 400, 20):
+            hit = w.view.pick(x, y)
+            if hit:
+                hit_parts.add(hit["part"])
+    assert hit_parts == {"底板", "立柱"}                        # 两个部件都能点到
+
+    w.parts_list.item(1).setCheckState(Qt.CheckState.Unchecked)   # 取消勾选「立柱」
+    assert w.view.part_ranges[1][3] is False
+    after = {hit["part"] for hit in (w.view.pick(x, y) for y in range(10, 400, 20)
+                                     for x in range(10, 400, 20)) if hit}
+    assert "立柱" not in after and "底板" in after
+
+
+def test_gif_export(moz, qapp, tmp_path, monkeypatch):
+    """GIF 导出（Pillow 可选）。无 GL 截图能力时跳过。"""
+    pytest.importorskip("PIL")
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    target = tmp_path / "out.gif"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(target), "")))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    w = viewer.ViewerWindow()
+    w.set_animation(lambda i: moz.Shape(f"translate([0, 0, {i}]) cube(2);"), 4, 4.0)
+    w.resize(160, 160)
+    w.show()
+    for _ in range(6):
+        qapp.processEvents()
+    w._export_gif()
+    if not target.exists():
+        pytest.skip("GL 截图不可用（无显示/无 GL），跳过 GIF 断言")
+    assert target.stat().st_size > 0
