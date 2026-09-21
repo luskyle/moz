@@ -166,3 +166,39 @@ def test_2d_view_is_interactive(moz, qapp):
     w.view.scale(1.5, 1.5)
     assert w.view.transform().m11() > scale_before
     w.view.reset_view()          # 「重置视角」对 2D 也要能用（不崩）
+
+
+def test_overlay_line_geometry(qapp):
+    positions, _ = viewer._line_geometry(True, False)
+    assert positions is not None and len(positions) == 12      # 3 轴 × 2 半线 × 2 顶点
+    positions, _ = viewer._line_geometry(False, True)
+    assert positions is not None and len(positions) == 44      # 11 条 × 2 方向 × 2 顶点
+    assert viewer._line_geometry(False, False) == (None, None)
+
+
+def test_overlay_menu_toggles(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(2))
+    assert w.view.line_count == 0                              # 默认不画叠加层
+    w.axes_action.setChecked(True)
+    assert w.view.show_axes and w.view.line_count == 12
+    w.grid_action.setChecked(True)
+    assert w.view.show_grid and w.view.line_count == 56
+
+
+def test_animation_toolbar(moz, qapp):
+    w = viewer.ViewerWindow()
+    w.set_shape(moz.cube(2))
+    assert not w.anim_bar.isVisibleTo(w)                       # 静态几何下不显示
+    w.set_animation(lambda i: moz.Shape(f"translate([0, 0, {i}]) cube(1);"), 5, 10.0)
+    assert w.anim_bar.isVisibleTo(w)
+    assert (w.frame_slider.minimum(), w.frame_slider.maximum()) == (0, 4)
+    assert w.fps_spin.value() == pytest.approx(10.0)
+    assert w.timer.interval() == 100
+    w._goto(3)
+    assert (w.index, w.frame_slider.value(), w.frame_label.text()) == (3, 3, "4/5")
+    w._toggle_play()
+    w._on_slider(1)                                            # 拖帧应暂停播放
+    assert w.index == 1 and not w.timer.isActive()
+    w._on_fps(20.0)
+    assert w.timer.interval() == 50

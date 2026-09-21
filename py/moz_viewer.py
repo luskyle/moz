@@ -19,6 +19,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (
     QApplication,
+    QDoubleSpinBox,
     QFileDialog,
     QGraphicsScene,
     QGraphicsView,
@@ -26,7 +27,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressDialog,
+    QSlider,
     QStatusBar,
+    QToolBar,
 )
 
 # 未着色对象在预览器里的默认材质色（与 OpenSCAD 默认配色同色系）
@@ -89,6 +92,43 @@ def _mesh_from_shape(shape, colorscheme=None):
     return {"points": points, "normals": normals, "colors": per_vertex}
 
 
+# 叠加层（坐标轴 / 地面网格）在归一化空间里的尺寸（几何已缩放到单位半径）
+_AXIS_LENGTH = 1.25
+_GRID_STEP = 0.25
+
+
+def _line_geometry(show_axes, show_grid):
+    """返回 (positions, colors)：坐标轴（X 红 / Y 绿 / Z 蓝）与 Z=0 地面网格的线段。
+
+    预览器是 Z-up，所以网格铺在 Z=0 平面上。两者都关时返回 (None, None)。
+    """
+    positions, colors = [], []
+    if show_axes:
+        for direction, color in (((1.0, 0.0, 0.0), (0.92, 0.26, 0.26)),
+                                 ((0.0, 1.0, 0.0), (0.30, 0.80, 0.30)),
+                                 ((0.0, 0.0, 1.0), (0.30, 0.50, 0.95))):
+            for sign in (-1.0, 1.0):
+                positions.append((0.0, 0.0, 0.0))
+                colors.append(color)
+                positions.append(tuple(sign * _AXIS_LENGTH * value for value in direction))
+                colors.append(color)
+    if show_grid:
+        grid_color = (0.34, 0.36, 0.40)
+        steps = int(round(_AXIS_LENGTH / _GRID_STEP))
+        for i in range(-steps, steps + 1):
+            offset = i * _GRID_STEP
+            for start, end in (((offset, -_AXIS_LENGTH, 0.0), (offset, _AXIS_LENGTH, 0.0)),
+                               ((-_AXIS_LENGTH, offset, 0.0), (_AXIS_LENGTH, offset, 0.0))):
+                positions.append(start)
+                colors.append(grid_color)
+                positions.append(end)
+                colors.append(grid_color)
+    if not positions:
+        return None, None
+    return (np.asarray(positions, dtype=np.float32).reshape(-1, 3),
+            np.asarray(colors, dtype=np.float32).reshape(-1, 3))
+
+
 class Interactive3D(QOpenGLWidget):
     """3D 视图：可显示一帧或一串动画帧（帧间共用同一 center/radius，避免抖动）。"""
 
@@ -103,6 +143,12 @@ class Interactive3D(QOpenGLWidget):
         self.gl = None
         self.vertex_buffer = None
         self.vao = None
+        self.line_program = None
+        self.line_vao = None
+        self.line_buffer = None
+        self.line_count = 0
+        self.show_axes = False
+        self.show_grid = False
         self.last_pos = QPoint()
         self.orthographic = False
         self.reset_view()
@@ -208,6 +254,33 @@ class Interactive3D(QOpenGLWidget):
             self.vertex_buffer.release()
         self.update()
 
+    def _line_positions(self):
+        """按当前开关返回叠加层几何，并同步 line_count（窗口未显示时也要一致）。"""
+        positions, colors = _line_geometry(self.show_axes, self.show_grid)
+        self.line_count = 0 if positions is None else len(positions)
+        return positions, colors
+
+    def _upload_lines(self):
+        """把叠加层（坐标轴/网格）写进 line_buffer（**要求调用方已 bind**）。"""
+        positions, colors = self._line_positions()
+        if positions is None:
+            return
+        interleaved = np.hstack((positions, colors)).astype(np.float32)
+        self.line_buffer.allocate(interleaved.tobytes(), interleaved.nbytes)
+
+    def set_overlays(self, show_axes=None, show_grid=None):
+        """开关坐标轴 / 地面网格（视图菜单）。"""
+        if show_axes is not None:
+            self.show_axes = bool(show_axes)
+        if show_grid is not None:
+            self.show_grid = bool(show_grid)
+        self._line_positions()      # 先算出 line_count（GL 缓冲可能还没建）
+        if self.line_buffer is not None:
+            self.line_buffer.bind()
+            self._upload_lines()
+            self.line_buffer.release()
+        self.update()
+
     def initializeGL(self):
         self.gl = QOpenGLFunctions(self.context())
         self.gl.initializeOpenGLFunctions()
@@ -273,6 +346,42 @@ class Interactive3D(QOpenGLWidget):
         self.vao.release()
         self.program.release()
 
+        # 叠加层（坐标轴 / 地面网格）：单独一套线框着色器与缓冲
+        self.line_program = QOpenGLShaderProgram(self)
+        line_vertex = """
+            attribute vec3 position;
+            attribute vec3 color;
+            uniform mat4 mvp;
+            varying vec3 vertexColor;
+            void main() { vertexColor = color; gl_Position = mvp * vec4(position, 1.0); }
+        """
+        line_fragment = """
+            varying vec3 vertexColor;
+            void main() { gl_FragColor = vec4(vertexColor, 1.0); }
+        """
+        if not self.line_program.addShaderFromSourceCode(QOpenGLShader.Vertex, line_vertex):
+            raise RuntimeError(self.line_program.log())
+        if not self.line_program.addShaderFromSourceCode(QOpenGLShader.Fragment, line_fragment):
+            raise RuntimeError(self.line_program.log())
+        if not self.line_program.link():
+            raise RuntimeError(self.line_program.log())
+        self.line_vao = QOpenGLVertexArrayObject(self)
+        self.line_vao.create()
+        self.line_vao.bind()
+        self.line_buffer = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
+        self.line_buffer.create()
+        self.line_buffer.bind()
+        self._upload_lines()
+        self.line_program.bind()
+        self.line_program.enableAttributeArray("position")
+        self.line_program.enableAttributeArray("color")
+        # 步长 24 字节：position(0) / color(12)
+        self.line_program.setAttributeBuffer("position", 0x1406, 0, 3, 24)
+        self.line_program.setAttributeBuffer("color", 0x1406, 12, 3, 24)
+        self.line_buffer.release()
+        self.line_vao.release()
+        self.line_program.release()
+
     def resizeGL(self, width, height):
         self.gl.glViewport(0, 0, width, max(height, 1))
 
@@ -289,6 +398,14 @@ class Interactive3D(QOpenGLWidget):
         self.gl.glDrawArrays(0x0004, 0, len(self.meshes[self.index]["points"]))
         self.vao.release()
         self.program.release()
+
+        if self.line_count and self.line_program is not None:
+            self.line_program.bind()
+            self.line_program.setUniformValue("mvp", projection * view)
+            self.line_vao.bind()
+            self.gl.glDrawArrays(0x0001, 0, self.line_count)   # GL_LINES
+            self.line_vao.release()
+            self.line_program.release()
 
     def _projection(self, aspect):
         matrix = QMatrix4x4()
@@ -380,6 +497,41 @@ class ViewerWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance)
         self._build_menus()
+        self._build_anim_bar()
+
+    def _build_anim_bar(self):
+        """动画工具条：帧滑块 + 播放速度（只在动画模式下显示）。"""
+        self.anim_bar = QToolBar("动画", self)
+        self.addToolBar(Qt.BottomToolBarArea, self.anim_bar)
+        self.frame_slider = QSlider(Qt.Horizontal, self)
+        self.frame_slider.setMinimumWidth(240)
+        self.frame_slider.valueChanged.connect(self._on_slider)
+        self.frame_label = QLabel("0/0", self)
+        self.fps_spin = QDoubleSpinBox(self)
+        self.fps_spin.setRange(0.5, 120.0)
+        self.fps_spin.setSingleStep(1.0)
+        self.fps_spin.setSuffix(" fps")
+        self.fps_spin.valueChanged.connect(self._on_fps)
+        self.anim_bar.addWidget(QLabel("帧", self))
+        self.anim_bar.addWidget(self.frame_slider)
+        self.anim_bar.addWidget(self.frame_label)
+        self.anim_bar.addSeparator()
+        self.anim_bar.addWidget(QLabel("速度", self))
+        self.anim_bar.addWidget(self.fps_spin)
+        self.anim_bar.setVisible(False)
+
+    def _on_slider(self, value):
+        if not self.frames:
+            return
+        if self.timer.isActive():
+            self._toggle_play()      # 手动拖帧就暂停
+        self._goto(value)
+
+    def _on_fps(self, value):
+        self.fps = float(value)
+        if self.frames:
+            self.timer.setInterval(max(1, int(1000.0 / self.fps)))
+        self._refresh_status()
 
     # ------------------------------------------------------------------ 载入
     def set_shape(self, shape):
@@ -401,6 +553,7 @@ class ViewerWindow(QMainWindow):
             self.status_hint = "空几何"
         self.setCentralWidget(self.view)
         self.anim_menu.setEnabled(False)
+        self.anim_bar.setVisible(False)
         self._refresh_status()
 
     def set_animation(self, frame_fn, frames, fps=8.0):
@@ -462,6 +615,14 @@ class ViewerWindow(QMainWindow):
         self.anim_menu.setEnabled(True)
         self.index = 0
         self.timer.setInterval(max(1, int(1000.0 / self.fps)))
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setRange(0, self.frames - 1)
+        self.frame_slider.setValue(0)
+        self.frame_slider.blockSignals(False)
+        self.fps_spin.blockSignals(True)
+        self.fps_spin.setValue(self.fps)
+        self.fps_spin.blockSignals(False)
+        self.anim_bar.setVisible(True)
         self._refresh_status()
 
     # ------------------------------------------------------------------ 菜单
@@ -489,6 +650,12 @@ class ViewerWindow(QMainWindow):
         self.ortho_action = QAction("正交投影", self, checkable=True)
         self.ortho_action.toggled.connect(self._toggle_ortho)
         view_menu.addAction(self.ortho_action)
+        self.axes_action = QAction("显示坐标轴", self, checkable=True)
+        self.axes_action.toggled.connect(lambda checked: self._set_overlay(show_axes=checked))
+        view_menu.addAction(self.axes_action)
+        self.grid_action = QAction("显示地面网格（Z=0）", self, checkable=True)
+        self.grid_action.toggled.connect(lambda checked: self._set_overlay(show_grid=checked))
+        view_menu.addAction(self.grid_action)
         scheme_menu = view_menu.addMenu("配色方案")
         self._add_action(scheme_menu, "默认（库当前配色）", lambda: self.set_colorscheme(None))
         for name in _color_schemes():
@@ -533,6 +700,10 @@ class ViewerWindow(QMainWindow):
             return
         self.index = index % self.frames
         self.view.set_frame(self.index)
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setValue(self.index)
+        self.frame_slider.blockSignals(False)
+        self.frame_label.setText(f"{self.index + 1}/{self.frames}")
         self._refresh_status()
 
     def _step(self, delta):
@@ -574,6 +745,10 @@ class ViewerWindow(QMainWindow):
         if isinstance(self.view, Interactive3D):
             self.view.orthographic = checked
             self.view.update()
+
+    def _set_overlay(self, show_axes=None, show_grid=None):
+        if isinstance(self.view, Interactive3D):
+            self.view.set_overlays(show_axes=show_axes, show_grid=show_grid)
 
     def set_colorscheme(self, name):
         """切换配色：重新取逐面颜色并重传缓冲。
