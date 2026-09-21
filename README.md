@@ -45,9 +45,55 @@
 >
 > 作者：luskyle
 
+## 目前有什么
+
+一句话：**把 OpenSCAD 2021.01 内核改造成一个可以被程序和脚本调用的几何内核，并提供一个与之语义严格对齐的 Python 建模 API。**
+
+```
+py/                      Python 层：建模 API（moz_openscad）+ 预览器（moz_viewer）+ 示例与验证脚本
+3rd/openscad/src/moz/    C ABI（本项目唯一新增的 C++），编译成 libmozopenscad.so
+3rd/openscad/            vendored 的 OpenSCAD 2021.01 源码（含 libraries/MCAD/fonts.scad）
+scripts/                 构建脚本
+build/                   构建目录与产物（未入库）
+docs/                    文档
+```
+
+| 能力 | 入口 |
+| --- | --- |
+| 用 Python 拼模型并导出 STL/3MF/OFF/AMF/DXF/SVG/PDF/PNG | `py/moz_openscad.py` |
+| 交互预览（3D 旋转/缩放，颜色来自 `color()`） | `shape.show()` / `py/moz_viewer.py` |
+| 直接调 C ABI（12 个函数） | `3rd/openscad/src/moz/moz_api.h` |
+| 从引擎里取值（`dxf_dim`/`rands`/`lookup`/`version`…，全精度） | `moz.value()` / `moz.number()` / `moz.vector()` |
+| 逐面颜色（与导出的 STL 三角面一一对应） | `Geometry.face_colors()` |
+| 校验「Python 版和原生 `.scad` 是不是同一个几何」 | `py/verify_examples.py` |
+
+## 快速上手
+
+前置：Python ≥ 3.10、`numpy`、`PySide6`；构建几何库需要 C++ 工具链与 CGAL/OpenCSG 等依赖
+（清单见 [docs/build.md](docs/build.md)）。
+
+```bash
+# 1) 构建几何内核（首次 3~5 分钟，改过 C++ 后增量约 30 秒）
+bash scripts/build_moz_openscad.sh
+
+# 2) 直接用 Python 建模
+PYTHONPATH=py python3 -c "
+import moz_openscad as moz
+shape = moz.difference(moz.cube(20, center=True), moz.sphere(12))
+shape.export('binstl', '/tmp/out.stl')
+print('dimension =', shape.dimension, '| empty =', shape.is_empty)
+"
+
+# 3) 预览某个示例（窗口里左键旋转、右键平移、滚轮缩放）
+PYTHONPATH=py python3 py/examples/Basics/CSG.py
+
+# 4) 校验示例与原生 .scad 的几何是否一致
+PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
+```
+
 ## Python 直接建模
 
-Python 示例不需要先写 `.scad` 文件。示例模块提供 `build()`，直接组合 `moz_openscad` 的基本体、布尔运算和变换：
+示例模块统一暴露 `build()`，返回一个 `Shape`（Python 侧**只拼 SCAD 源码**，求值交给引擎）：
 
 ```python
 import moz_openscad as moz
@@ -56,29 +102,44 @@ def build():
 	return moz.difference(moz.cube(20, center=True), moz.sphere(12))
 ```
 
-当前已经提供直接 Python 构造版本的示例：
-
-- `py/examples/Basics/CSG.py`
-- `py/examples/Basics/CSG-modules.py`
-
-运行示例仍然可以导出 STL，但导出只是交付格式，不是建模过程：
-
 ```bash
-PYTHONPATH=py python3 py/examples/Basics/CSG.py
+PYTHONPATH=py python3 py/examples/Basics/CSG.py                      # 预览
+PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py     # 或把任意 build() 交给预览器
 ```
 
-## 界面预览
+## 示例
 
-可以直接把提供 `build()` 的 Python 示例交给预览器。预览器调用 native OpenSCAD 的 PNG 渲染接口，在窗口中显示结果，不需要先导出或打开 STL：
+`py/examples/` 下 48 个示例，分类与文件名完全对应上游 `3rd/openscad/examples/`：
+`Basics/` 9 个、`Functions/` 5 个、`Advanced/` 8 个、`Parametric/` 2 个、`Old/` 24 个。
+它们引用外部数据文件（`.dxf`/`.dat`/`.stl`/`.png`）与 JSON 参数集时，**指向原始示例目录里的同一份文件**，不做拷贝。
 
-```bash
-PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py
-```
+保真度已逐个校验：`PYTHONPATH=py python3 py/verify_examples.py` 输出 `汇总: OK=48`
+（其中 32 个连导出字节都一致，其余是「同一网格不同面序」或「同一实体不同三角化」）。
+判定标准与结果明细见 [docs/verification.md](docs/verification.md)。
 
-窗口中的 `Reload` 会重新执行 `build()` 并刷新预览。当前预览器基于 Python 内置 `tkinter`，因此需要系统安装 Tk：
+## 文档
 
-```bash
-sudo apt install python3-tk
-```
+| 主题 | 文档 |
+| --- | --- |
+| 索引与快速开始 | [docs/README.md](docs/README.md) |
+| 三层架构、数据流、对上游的改动清单 | [docs/architecture.md](docs/architecture.md) |
+| 构建、依赖、运行时环境变量、排错 | [docs/build.md](docs/build.md) |
+| C ABI 参考（逐函数语义/错误/内存所有权） | [docs/c-api.md](docs/c-api.md) |
+| Python API 参考 | [docs/python-api.md](docs/python-api.md) |
+| 示例组织方式与迁移 `.scad` 的清单 | [docs/examples.md](docs/examples.md) |
+| 保真度验证方法、判据与当前结果 | [docs/verification.md](docs/verification.md) |
+| **SCAD 语义陷阱（实测清单）** | [docs/scad-semantics.md](docs/scad-semantics.md) |
+| 预览器 | [docs/viewer.md](docs/viewer.md) |
+| 现状与已知限制 | [docs/limitations.md](docs/limitations.md) |
+| 第三方组件与许可 | [docs/third-party.md](docs/third-party.md) |
 
-其余按原目录归类的入口目前仍保留为兼容回归入口，通过 `moz.eval_file()` 验证原始 OpenSCAD 示例。它们可以继续逐个迁移成 `build()` 形式，迁移后即可直接交给 `moz_viewer.py` 预览。
+## 路线
+
+当前形态是「内核 + Python 绑定（桌面预览）」，下一步的产品形态是 Web/服务化
+（见 [docs/limitations.md](docs/limitations.md) 里列出的能力缺口：几何查询、动画帧、服务化封装等）。
+
+## 许可
+
+本仓库自有代码为 Apache-2.0（见 [LICENSE](LICENSE)）；vendored 的 OpenSCAD 内核为 GPLv2（含 CGAL 例外），
+`libraries/MCAD/fonts.scad` 为 LGPL 2.1。链接出的 `libmozopenscad.so` 因此属于 GPL 派生物——
+对外分发/服务化前请先确认许可义务，详见 [docs/third-party.md](docs/third-party.md)。
