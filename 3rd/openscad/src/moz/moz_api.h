@@ -124,6 +124,8 @@ enum moz_render_mode {
   MOZ_RENDER_CGAL = 2            /* 上游 --render=cgal：几何渲染，无 color() */
 };
 
+enum moz_projection { MOZ_PROJECTION_PERSPECTIVE = 0, MOZ_PROJECTION_ORTHOGONAL = 1 };
+
 typedef struct moz_render_options {
   unsigned int width;        /* 0 -> RenderSettings::img_width */
   unsigned int height;       /* 0 -> RenderSettings::img_height */
@@ -134,6 +136,18 @@ typedef struct moz_render_options {
   int show_scales;
   int show_crosshairs;
   const char *colorscheme;   /* NULL / "" = 沿用当前配色方案 */
+
+  /* --- 相机覆盖 ---
+   * has_camera 非 0 时忽略模型里的 $vpr/$vpt/$vpd/$vpf，改用下面的值；为 0 时按模型
+   * 的 $vp* 或 viewall + autocenter 自动取景（与上游一致）。
+   * vpr 是旋转角（度）、vpt 是目标点、vpd 是相机距离、vpf 是视场角（度，<=0 表示不改）。
+   */
+  int has_camera;
+  double vpr[3];
+  double vpt[3];
+  double vpd;
+  double vpf;
+  int projection;            /* 见 enum moz_projection；独立于 has_camera，默认透视 */
 } moz_render_options;
 
 /* 用上游默认值填充 opts（建议 C 调用方先调用它，再覆盖需要的字段） */

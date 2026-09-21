@@ -716,6 +716,12 @@ extern "C" void moz_render_options_default(moz_render_options *opts)
   opts->show_scales = 0;
   opts->show_crosshairs = 0;
   opts->colorscheme = nullptr;
+  opts->has_camera = 0;
+  opts->vpr[0] = opts->vpr[1] = opts->vpr[2] = 0.0;
+  opts->vpt[0] = opts->vpt[1] = opts->vpt[2] = 0.0;
+  opts->vpd = 0.0;
+  opts->vpf = 0.0;
+  opts->projection = MOZ_PROJECTION_PERSPECTIVE;
 }
 
 /* 应用配色方案：与上游 set_render_color_scheme 一致，未知名字产生警告并沿用当前配色 */
@@ -740,11 +746,35 @@ static void moz_prepare_camera(Camera &camera, const ContextHandle<FileContext> 
   camera.updateView(filectx.ctx, true);
 }
 
+/* 显式相机覆盖：设置 $vpr/$vpt/$vpd/$vpf 并关掉自动取景，使结果不受模型相机影响 */
+static void moz_apply_camera_override(Camera &camera, const moz_render_options &opts)
+{
+  camera.viewall = false;
+  camera.autocenter = false;
+  camera.locked = true;
+  camera.setVpr(opts.vpr[0], opts.vpr[1], opts.vpr[2]);
+  camera.setVpt(opts.vpt[0], opts.vpt[1], opts.vpt[2]);
+  camera.setVpd(opts.vpd);
+  if (opts.vpf > 0.0) camera.setVpf(opts.vpf);
+}
+
+static void moz_apply_projection(Camera &camera, const moz_render_options &opts)
+{
+  camera.setProjection(opts.projection == MOZ_PROJECTION_ORTHOGONAL
+                           ? Camera::ProjectionType::ORTHOGONAL
+                           : Camera::ProjectionType::PERSPECTIVE);
+}
+
 /* preview 路径：preview 渲染器自己算 bbox，这里按其结果取景 */
 static void moz_setup_camera(Camera &camera, const ContextHandle<FileContext> &filectx,
-                             const BoundingBox &bbox)
+                             const BoundingBox &bbox, const moz_render_options &opts)
 {
+  moz_apply_projection(camera, opts);
   moz_prepare_camera(camera, filectx);
+  if (opts.has_camera) {
+    moz_apply_camera_override(camera, opts);  /* 覆盖 $vp*，并关掉 viewall/autocenter */
+    return;
+  }
   if (camera.viewall) camera.viewAll(bbox);
 }
 
@@ -815,7 +845,7 @@ static bool moz_render_preview(const moz_geom *g, const moz_render_options &opts
   Camera camera;
   camera.pixel_width = opts.width;
   camera.pixel_height = opts.height;
-  moz_setup_camera(camera, filectx, glview->getRenderer()->getBoundingBox());
+  moz_setup_camera(camera, filectx, glview->getRenderer()->getBoundingBox(), opts);
   glview->setCamera(camera);
   glview->paintGL();
 
@@ -847,7 +877,10 @@ static bool moz_render_cgal(const moz_geom *g, const moz_render_options &opts, s
   Camera camera;
   camera.pixel_width = opts.width;
   camera.pixel_height = opts.height;
+  moz_apply_projection(camera, opts);
   moz_prepare_camera(camera, filectx);
+  /* 覆盖必须在 export_png 之前：它按值收下 camera，并按 viewall 决定是否 viewAll */
+  if (opts.has_camera) moz_apply_camera_override(camera, opts);
 
   const bool ok = export_png(g->geom, options, camera, output);
   delete absolute_root_node;

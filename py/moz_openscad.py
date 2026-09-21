@@ -61,7 +61,8 @@ __all__ = [
     "Geometry", "OpenSCADError", "Shape", "Part", "RenderOptions", "Measure",
     "cube", "sphere", "cylinder", "circle",
     "square", "polygon", "text", "polyhedron", "union", "difference", "intersection",
-    "translate", "rotate", "scale", "mirror", "multmatrix", "hull", "minkowski",
+    "translate", "rotate", "scale", "mirror", "resize", "multmatrix", "hull", "minkowski",
+    "background", "highlight", "only", "disable",
     "linear_extrude", "rotate_extrude", "offset", "projection", "color",
     "import_shape", "surface", "settings", "lookup",
     "sin_deg", "cos_deg", "tan_deg", "asin_deg", "acos_deg", "atan_deg", "atan2_deg",
@@ -168,6 +169,9 @@ class Shape:
 
     def mirror(self, vector):
         return Shape(f"mirror(v = {_format_open_scad_value(vector)}) {_as_source(self)}")
+
+    def resize(self, newsize, auto=None):
+        return resize(newsize, self, auto=auto)
 
     @property
     def dimension(self):
@@ -589,6 +593,46 @@ def mirror(vector, obj=None):
     return Shape(f"mirror(v = {_format_open_scad_value(vector)}) {_as_source(obj)}")
 
 
+def resize(newsize, obj=None, auto=None):
+    """resize()：按包围盒把对象缩放到指定尺寸。
+
+    newsize 是目标尺寸（3 元），auto 是同长度的布尔向量——为 true 的分量保持比例
+    （与 SCAD 同名参数一致）。用法：``moz.resize([20, 10, 5], shape)``。
+    """
+    if obj is None:
+        raise ValueError("resize() requires an object; use resize(newsize, shape)")
+    options = [f"newsize = {_format_open_scad_value(newsize)}"]
+    if auto is not None:
+        options.append(f"auto = {_format_open_scad_value(auto)}")
+    return Shape(f"resize({', '.join(options)}) {_as_source(obj)}")
+
+
+def _modifier(symbol, obj):
+    if obj is None:
+        raise ValueError("modifier requires an object")
+    return Shape(f"{symbol} {_as_source(obj)}")
+
+
+def background(obj):
+    """`%` 背景修饰符：预览可见，但**不进入 F6 求值/导出**（因此 headless 下几何为空）。"""
+    return _modifier("%", obj)
+
+
+def highlight(obj):
+    """`#` 高亮修饰符：只影响预览，几何上等同普通对象。"""
+    return _modifier("#", obj)
+
+
+def only(obj):
+    """`!` 根修饰符：只渲染该对象（忽略它的兄弟）。"""
+    return _modifier("!", obj)
+
+
+def disable(obj):
+    """`*` 禁用修饰符：该对象不参与几何。"""
+    return _modifier("*", obj)
+
+
 def hull(*items):
     return _compose("hull", *items)
 
@@ -926,6 +970,12 @@ class RenderOptions(C.Structure):
         ("show_scales", C.c_int),
         ("show_crosshairs", C.c_int),
         ("colorscheme", C.c_char_p),
+        ("has_camera", C.c_int),
+        ("vpr", C.c_double * 3),
+        ("vpt", C.c_double * 3),
+        ("vpd", C.c_double),
+        ("vpf", C.c_double),
+        ("projection", C.c_int),
     ]
 
 
@@ -939,21 +989,48 @@ _RENDERER_NAMES = {
     "cgal": RENDERER_CGAL,
 }
 
+_PROJECTION_NAMES = {
+    "perspective": 0,
+    "ortho": 1,
+    "orthogonal": 1,
+}
+
 
 def _render_options(width=0, height=0, renderer="opencsg", faces=True, edges=False,
-                    axes=False, scales=False, crosshairs=False, colorscheme=None):
+                    axes=False, scales=False, crosshairs=False, colorscheme=None,
+                    vpr=None, vpt=None, vpd=None, vpf=None, projection=None):
     """构造渲染选项。width/height 为 0 时用库默认值（RenderSettings，512x512）。
 
     renderer="opencsg"/"throwntogether" 走上游 preview 路径（color() 生效），
     renderer="cgal" 走上游 --render=cgal 的几何渲染（无颜色）。
+
+    给了 vpr/vpt/vpd/vpf 任意一个就进入**相机覆盖**（忽略模型里的 $vp*，也不自动取景），
+    此时必须给 vpd（相机距离）；projection 可选 "perspective"（默认）/ "ortho"。
     """
     if isinstance(renderer, str):
         renderer = _RENDERER_NAMES[renderer]
+    if projection is not None and projection not in _PROJECTION_NAMES:
+        raise ValueError(f"unknown projection {projection!r}; use 'perspective' or 'ortho'")
+
+    has_camera = any(value is not None for value in (vpr, vpt, vpd, vpf))
+    if has_camera and vpd is None:
+        raise ValueError("vpd (camera distance) is required when overriding the camera")
+
+    def _vec3(value):
+        values = tuple(float(x) for x in (value if value is not None else (0.0, 0.0, 0.0)))
+        if len(values) != 3:
+            raise ValueError("camera vectors must have 3 components")
+        return (C.c_double * 3)(*values)
+
     return RenderOptions(
         width, height, renderer,
         int(bool(faces)), int(bool(edges)), int(bool(axes)),
         int(bool(scales)), int(bool(crosshairs)),
         colorscheme.encode() if colorscheme else None,
+        int(has_camera), _vec3(vpr), _vec3(vpt),
+        float(vpd) if vpd is not None else 0.0,
+        float(vpf) if vpf is not None else 0.0,
+        _PROJECTION_NAMES.get(projection, 0) if projection else 0,
     )
 
 
