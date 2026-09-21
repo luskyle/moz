@@ -110,12 +110,14 @@ moz.asin_deg(x) moz.acos_deg(x) moz.atan_deg(x)  moz.atan2_deg(y, x)
 g = moz.eval_text("cube([10,20,30]);", side=5)   # 关键字参数 = -D 参数
 g.dimension          # 上游语义：3 / 2；空几何仍是 3
 g.is_empty           # 是否空几何（判断「有没有东西」用这个）
+m = g.measure        # 几何测量快照：bbox / volume / area / facets / vertices / centroid（见 §12）
 g.export("binstl", "out.stl")
 data = g.export_bytes("3mf")
 png  = g.render_png_bytes(400, 300, colorscheme="Tomorrow")
 colors = g.face_colors()      # 4 字节/面，与 export_bytes("binstl") 的三角面一一对应
 g.log                         # echo + 警告（与 OpenSCAD 控制台文本一致）
 g.take_log()                  # 同上，读取后清空
+g.show()                      # 打开预览器（同 Shape.show()）
 g.close()                     # 也可用 with 语句
 ```
 
@@ -158,16 +160,25 @@ g = moz.eval_file("Functions/echo.scad")
 print(g.log)        # ECHO: "f1: ", 3, 5 ...
 ```
 
-`moz.dump(src, "echo")` 只回 echo 文本行。
+`moz.dump(src, "echo")` 只回 echo 文本行。`moz.dump(src, "ast", docname="/abs/x.scad")`
+可指定文档名（影响 ast/csg 里显示的路径；不传用 `<stdin>`）。
 
 ## 9. 预览器
 
 ```python
-shape.show(title="moz - demo", width=900, height=650)
+shape.show(title="moz - demo", width=900, height=650)      # 静态几何（Shape / Geometry / Part）
+moz.show_animation(lambda i: build(i / 24), frames=24, fps=12)   # 在窗口里播放动画
 ```
 
 3D 用 PySide6 的 `QOpenGLWidget` 自绘（逐面颜色来自 `color()`）、2D 走 `QSvgWidget`、
-空几何显示「空几何」。细节见 [viewer.md](viewer.md)。
+空几何显示「空几何」。
+
+窗口带菜单栏：**文件**（导出当前帧 STL / 引擎渲染 PNG / 视图截图）、**视图**（重置视角、正交投影）、
+**动画**（播放/暂停、逐帧、循环；静态几何下禁用）、**帮助**（关于）。快捷键：`Space` 播放/暂停、
+`←`/`→` 逐帧、`Home` 重置视角。
+
+`show_animation` 打开窗口时一次性预计算全部帧（各帧共用同一套居中/缩放，模型才是「动」而不是抖动），
+播放用定时器换缓冲。细节见 [viewer.md](viewer.md)。
 
 ## 10. 库路径解析
 
@@ -184,3 +195,62 @@ shape.show(title="moz - demo", width=900, height=650)
 ```python
 bracket = moz.Bracket(width=40, height=60, thickness=6, hole_diameter=4, hole_positions=[(10, 10)])
 ```
+
+## 12. 几何测量：`Geometry.measure`
+
+```python
+m = g.measure          # 返回 Measure 快照（纯 Python 值，句柄释放后仍可用）
+m.dimension            # 3 / 2
+m.is_empty             # 是否空几何
+m.bbox                 # ((minx,miny,minz), (maxx,maxy,maxz))；空几何为 nan
+m.bbox_min, m.bbox_max # 同上，分开取
+m.volume               # 3D 体积；2D 为 nan
+m.area                 # 3D 表面积；2D 面积
+m.facets               # 3D 三角面数；2D 轮廓顶点数
+m.vertices             # 去重顶点数
+m.centroid             # (x, y, z)：3D 体积质心 / 2D 面积质心；空几何为 nan
+```
+
+3D 用与 `export_bytes("binstl")` **同一条三角化路径**的网格（口径与导出一致），
+2D 用多边形轮廓（鞋带公式 + 面积质心）。空几何的 `volume`/`area` 为 0，
+`bbox`/`centroid` 为 `nan`。`Shape.measure` / `Part.measure` 同理（每次访问会重新求值）。
+
+```python
+moz.eval_text("difference() { cube(20, center=true); sphere(12); }").measure.volume
+```
+
+## 13. 动画帧：`moz.eval_animation`
+
+对应上游 `--animate N`：逐帧把 `$t = frame / fps` 传给模型并回调。
+
+```python
+def render_frame(frame, geometry):     # geometry 只在本次回调期间有效
+    geometry.export("binstl", f"/tmp/frame{frame:03d}.stl")
+
+frames = moz.eval_animation(source, 30, 10.0, callback=render_frame)   # 30 帧, 10fps
+frames = moz.eval_animation("", 30, 10.0, callback=render_frame, path="model.scad")  # 按文件
+```
+
+- `callback(frame, geometry)` 每帧调用一次；`geometry` **只在回调期间有效**（回调返回后引擎
+  立即释放它），之后再访问会抛 `OpenSCADError`。回调里可以照常 `export`/`render_png`/`measure`。
+- callback 返回非 0 时提前中止；返回**已完成的帧数**。
+- `$t` 由本函数逐帧注入，不要在 `variables` 里再给；其余 `variables` 仍是 `-D` 参数。
+- 回调抛出的 Python 异常会被原样重新抛出。
+
+## 14. 库搜索路径
+
+```python
+moz.add_library_path("/path/to/libs")   # 追加到 use <...> / import 的搜索列表
+moz.library_paths()                     # 当前列表（含 OPENSCADPATH、用户库目录、资源 libraries）
+```
+
+## 15. 导出选项
+
+```python
+g.export("pdf", "out.pdf", source_file_name="part.scad", source_file_path="/abs/part.scad")
+g.export_bytes("svg", source_file_name="part.scad")
+```
+
+`source_file_name` / `source_file_path` 覆盖 `ExportInfo` 里 PDF 用的源文档信息。
+**OpenSCAD 2021.01 没有更多导出开关**（3MF 无元数据/单位、AMF 单位与 producer 元数据硬编码、
+STL 无单位/精度参数），所以这是 C ABI 能透出的全部导出选项。

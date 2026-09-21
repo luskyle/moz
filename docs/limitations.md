@@ -4,14 +4,14 @@
 
 ## C ABI / Python 侧的能力缺口
 
-| 缺口 | 说明 |
+| 项 | 状态 / 说明 |
 | --- | --- |
-| 没有几何查询 | 拿不到包围盒、体积、表面积、面数、重心等测量值。`py/verify_examples.py` 的这三个量是脚本自己在 Python 里从 STL 三角面算出来的，不是 API |
-| 没有动画帧循环 | 上游 `--animate N` 会逐帧设 `$t`；我们只能通过 `-D` 传 `$t`（`moz.eval_text(src, **{"$t": 0.25})`），要批量出帧得自己循环 |
-| 没有 `--export-format` 之类的细粒度导出选项 | 例如 3MF/AMF 的元数据、STL 的单位/精度开关都没有暴露 |
-| 没有库搜索路径的运行时接口 | 依赖 `OPENSCADPATH` 环境变量（以及自动填的资源目录） |
+| 几何查询 | ✅ 已提供：`moz_geom_measure` / `Geometry.measure` → 包围盒、体积（3D）、表面积（3D）/面积（2D）、三角面数、去重顶点数、质心（3D 体积质心 / 2D 面积质心） |
+| 动画帧 | ✅ 已提供：`moz_eval_animation` / `moz_eval_animation_file` / `moz.eval_animation`，逐帧把 `$t = frame / fps` 传给模型并回调（等价上游 `--animate`） |
+| 库搜索路径的运行时接口 | ✅ 已提供：`moz_add_library_path` / `moz_get_library_paths`，不再只能靠 `OPENSCADPATH` 环境变量 |
+| 细粒度导出选项 | ⚠️ **基本没有可暴露的**：2021.01 里 STL 只有 ascii/二进制之分（由 format 决定）、3MF 无元数据/单位参数、AMF 的 `unit="millimeter"` 与 producer 元数据是硬编码。仅透出 `ExportInfo` 真正可配的 `sourceFileName`/`sourceFilePath`（`moz_export_ex` / `Geometry.export(..., source_file_name=...)`，只有 PDF 会用到） |
 | 没有 CSG 树/颜色以外的中间产物接口 | 例如「每个 CSG product 的几何 + 颜色 + 变换」这种数据结构只用于内部的逐面颜色判定 |
-| 单实例串行 | 所有入口共享一个全局互斥量（引擎有静态全局状态），并发请求只是排队 |
+| 单实例串行 | 所有入口共享一个全局**递归**互斥量（引擎有静态全局状态），并发请求只是排队；递归是为了让动画回调里能再调 `measure`/`export`/`render` |
 | 没有服务化封装 | Web/服务化是项目路线目标，目前只有库 + 绑定 + 预览器；尚无 HTTP/任务队列/沙箱 |
 
 ## 与上游行为的已知差异（有意保留，避免误导）

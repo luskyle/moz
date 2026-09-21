@@ -3,11 +3,17 @@
 `py/moz_viewer.py`，基于 PySide6（`QOpenGLWidget` + `QSvgWidget`）。
 
 ```bash
-PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py   # 给一个暴露 build() 的文件
-PYTHONPATH=py python3 py/examples/Basics/CSG.py                    # 或者示例自己的 __main__
+PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py                 # 给一个暴露 build() 的文件
+PYTHONPATH=py python3 py/moz_viewer.py py/examples/moz/animation.py --frames 24 --fps 12
+PYTHONPATH=py python3 py/examples/Basics/CSG.py                                  # 或者示例自己的 __main__
 ```
 
-Python 里的入口是 `Shape.show(title=..., width=..., height=...)`。
+Python 入口：
+
+| 入口 | 作用 |
+| --- | --- |
+| `shape.show(title=..., width=..., height=...)` | 显示单个静态几何（`Shape.show` / `Geometry.show` / `Part.show`） |
+| `moz.show_animation(frame_fn, frames, fps=8.0, ...)` | **在窗口里播放动画**：`frame_fn(i)` 返回第 i 帧的 Shape |
 
 ## 行为
 
@@ -16,6 +22,36 @@ Python 里的入口是 `Shape.show(title=..., width=..., height=...)`。
 | 3D 几何 | OpenGL 网格：左键旋转、右键平移、滚轮缩放 |
 | 2D 几何 | `QSvgWidget` 显示导出的 SVG 矢量图 |
 | 空几何 | 显示「空几何」文字（**判空必须先于判维度**：上游语义下空几何的 `dimension` 仍是 3） |
+
+## 菜单
+
+| 菜单 | 项（快捷键） |
+| --- | --- |
+| 文件 | 导出当前帧 STL… (`Ctrl+S`) · 导出当前帧 PNG（引擎渲染）… (`Ctrl+E`) · 保存视图截图… (`Ctrl+Shift+S`) · 退出 (`Ctrl+Q`) |
+| 视图 | 重置视角 (`Home`) · 正交投影（勾选切换） |
+| 动画 | 播放/暂停 (`Space`) · 上一帧 (`←`) · 下一帧 (`→`) · 回到首帧 (`Ctrl+Home`) · 循环播放（勾选） |
+| 帮助 | 关于 moz viewer |
+
+- 「导出 STL/PNG」走**引擎**：静态用原始几何、动画用 `frame_fn(当前帧)` 重新求值一次，
+  所以导出的是精确几何（PNG 保留 `color()`，相机按模型 `$vp*` 或自动取景）。
+- 「保存视图截图」是 GL 窗口的 `grabFramebuffer()`，画面与你在窗口里看到的当前视角一致。
+- 动画菜单在**静态几何**下自动禁用。
+
+## 动画播放
+
+```python
+def frame_fn(i):
+    return build(t=i / 24)          # 第 i 帧（t ∈ [0, 1)）
+
+moz.show_animation(frame_fn, frames=24, fps=12)
+```
+
+- 打开窗口时**一次性预计算**全部帧的网格（状态栏显示进度），之后播放/逐帧不再求值。
+- 各帧共用**同一套** center/radius（取所有帧包围盒的并集）再居中/缩放——否则每帧会被独立
+  重新居中，看起来模型「原地抖动」而不是运动。
+- 播放用 `QTimer`（间隔 `1000/fps` ms）换顶点缓冲；「循环」关闭时到末帧自动停。
+- 逐帧求值想用于**批处理**（导出文件）请用 `moz.eval_animation`（见 [python-api.md](python-api.md) §13）；
+  两个接口互补：一个用于看，一个用于跑。
 
 ## 颜色
 
@@ -31,10 +67,12 @@ Python 里的入口是 `Shape.show(title=..., width=..., height=...)`。
 
 ```python
 from PySide6.QtWidgets import QApplication
+import moz_viewer as viewer
 app = QApplication([])
-w = Interactive3D(shape); w.resize(360, 260); w.show()
+meshes = [viewer._mesh_from_shape(shape)]        # 单个静态帧；动画则传入多帧的 mesh 列表
+w = viewer.Interactive3D(meshes); w.resize(360, 260); w.show()
 for _ in range(6): app.processEvents()
-img = w.grabFramebuffer(); img.save("/tmp/view.png")     # 抓帧后统计像素颜色即可确认上色生效
+img = w.grabFramebuffer(); img.save("/tmp/view.png")   # 抓帧后统计像素颜色即可确认上色生效
 ```
 
 ## 依赖与限制
@@ -42,5 +80,6 @@ img = w.grabFramebuffer(); img.save("/tmp/view.png")     # 抓帧后统计像素
 - 需要 `numpy` 与 `PySide6`（见 `pyproject.toml`）；3D 视图需要可用的 OpenGL 上下文。
 - 预览器读的是 **STL 网格**（`export_bytes("binstl")`），因此显示的是**求值后的实体**，
   不是 CSG 预览：`%` 背景对象、`#` 高亮都不显示。
+- 动画**预计算**要逐帧求值，帧多/模型大时打开窗口会慢（状态栏会显示进度）；播放本身是即时的。
 - 每次构造/重载都会重新求值（Python 侧不缓存几何），大模型上「求值」才是耗时大头
   （实测 1.3~31.6 s，而导出 STL + 逐面颜色只要 0.08~1.13 s）。

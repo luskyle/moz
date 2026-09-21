@@ -11,6 +11,17 @@
 | `Parametric/` | 2 | `sign.json`、`candleStand.json`（参数集） |
 | `Old/` | 24 | `example007/008/009/013/015.dxf`、`example010.dat`、`example012/016.stl`，以及 `MCAD/fonts.scad`（仅 023） |
 
+另有 `moz/` 分类（**不是**上游示例的翻译，上游没有对应 `.scad`，因此**不在**
+`py/verify_examples.py` 的比对范围内）：放 moz 在 OpenSCAD 之上新增能力的示例。
+
+| 文件 | 演示 |
+| --- | --- |
+| `moz/measure.py` | `Geometry.measure`（包围盒/体积/表面积/面数/顶点数/质心）、导出选项、`add_library_path`/`library_paths` |
+| `moz/animation.py` | **在窗口里播放动画**（`moz.show_animation`）+ `--export` 用 `moz.eval_animation` 逐帧导出；含 `$t` 用法陷阱的说明 |
+
+`measure.py` 支持 `--no-show`（不弹窗口，只打印）；`animation.py` 默认播放，`--no-show --export`
+则只导出。便于无显示环境跑。
+
 ## 文件约定
 
 ```python

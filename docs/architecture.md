@@ -11,8 +11,9 @@
 ├──────────────────────────────────────────────────────────────┤
 │ 3rd/openscad/src/moz/  C ABI 层（本项目唯一新增的 C++）       │
 │   moz_api.h  moz_api.cc                                      │
-│   moz_eval_text/file · moz_eval_value · moz_export(_bytes)   │
-│   moz_render_png(_bytes) · moz_geom_face_colors · moz_dump   │
+│   moz_eval_* · moz_eval_value · moz_export* · moz_dump       │
+│   moz_render_png* · moz_geom_face_colors · moz_geom_measure  │
+│   moz_eval_animation* · moz_add/get_library_path             │
 ├──────────────────────────────────────────────────────────────┤
 │ 3rd/openscad/  OpenSCAD 2021.01 内核（vendored，见下）        │
 │   解析器 → 实例化 → CGAL 布尔求值 → 导出 / 离屏渲染          │
@@ -52,7 +53,7 @@
 ## 几个关键设计决定
 
 - **用 C ABI + ctypes，而不是 pybind11/CPython 扩展**：绑定层零编译依赖，Python 代码可读可改；
-  跨语言边界只有 12 个函数，语义边界清晰（错误统一走 `err` 字符串）。
+  跨语言边界只有 20 个函数，语义边界清晰（错误统一走 `err` 字符串）。
 - **Python 不做几何运算**：SCAD 的求值语义（$fn/$fa/$fs、布尔顺序、Nef 结构）很难在 Python 里复刻一致。
   让引擎算，是本项目能让「Python 版与原生 .scad 结果一致」的前提（见 [verification.md](verification.md)）。
 - **共享库而不是可执行文件**：headless 目标（`HEADLESS=ON` + `OPENSCAD_NOGUI`）把 GUI/Qt 依赖摘掉，
