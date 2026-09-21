@@ -3,6 +3,7 @@
 
 import argparse
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -21,6 +22,27 @@ from PySide6.QtWidgets import (
 
 # 未着色对象在预览器里的默认材质色（与 OpenSCAD 默认配色同色系）
 _DEFAULT_COLOR = np.asarray([0.20, 0.62, 0.90], dtype=np.float32)
+
+
+def _color_schemes():
+    """资源目录里可用的渲染配色方案名（`color-schemes/render/*.json` 的 name 字段）。"""
+    root = os.environ.get("MOZ_OPENSCAD_RESOURCE_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "3rd", "openscad")
+    directory = os.path.join(root, "color-schemes", "render")
+    names = []
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError:
+        return names
+    for entry in entries:
+        if not entry.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(directory, entry), encoding="utf-8") as handle:
+                names.append(json.load(handle).get("name") or entry[:-5])
+        except (OSError, ValueError):
+            names.append(entry[:-5])
+    return names
 
 
 def _face_colors(shape, colorscheme=None):
@@ -90,9 +112,31 @@ class Interactive3D(QOpenGLWidget):
         return center, radius
 
     def reset_view(self):
-        self.yaw, self.pitch, self.distance = -35.0, 25.0, 3.0
-        self.pan_x = self.pan_y = 0.0
+        # OpenSCAD 是 Z-up，预览器跟随（此前用 Y-up，与 OpenSCAD 的默认视角不一致）
+        self.yaw, self.pitch, self.distance = -60.0, 30.0, 3.0
+        self.target = np.zeros(3, dtype=np.float64)
         self.update()
+
+    def set_view(self, yaw, pitch):
+        """直接设定视角（用于预设按钮）。pitch 会夹到 ±89.5，避免与 up 向量平行。"""
+        self.yaw = float(yaw)
+        self.pitch = max(-89.5, min(89.5, float(pitch)))
+        self.update()
+
+    def _eye_direction(self):
+        """由 yaw/pitch 得到相机相对目标点的方向（单位向量，Z-up）。"""
+        yaw, pitch = np.radians([self.yaw, self.pitch])
+        return np.array([np.cos(pitch) * np.cos(yaw),
+                         np.cos(pitch) * np.sin(yaw),
+                         np.sin(pitch)], dtype=np.float64)
+
+    def _view(self):
+        eye = self.target + self.distance * self._eye_direction()
+        matrix = QMatrix4x4()
+        matrix.lookAt(QVector3D(*(float(v) for v in eye)),
+                      QVector3D(*(float(v) for v in self.target)),
+                      QVector3D(0.0, 0.0, 1.0))
+        return matrix
 
     def _normalized(self, mesh):
         return (mesh["points"] - self.center) / self.radius
@@ -209,17 +253,6 @@ class Interactive3D(QOpenGLWidget):
             matrix.perspective(45.0, aspect, 0.01, 200.0)
         return matrix
 
-    def _view(self):
-        yaw, pitch = np.radians([self.yaw, self.pitch])
-        eye = QVector3D(
-            float(self.distance * np.cos(pitch) * np.cos(yaw) + self.pan_x),
-            float(self.distance * np.sin(pitch) + self.pan_y),
-            float(self.distance * np.cos(pitch) * np.sin(yaw)),
-        )
-        matrix = QMatrix4x4()
-        matrix.lookAt(eye, QVector3D(self.pan_x, self.pan_y, 0), QVector3D(0, 1, 0))
-        return matrix
-
     def mousePressEvent(self, event):
         self.last_pos = event.position().toPoint()
 
@@ -228,11 +261,17 @@ class Interactive3D(QOpenGLWidget):
         delta = current - self.last_pos
         self.last_pos = current
         if event.buttons() & Qt.LeftButton:
-            self.yaw += delta.x() * 0.6
-            self.pitch = max(-89.0, min(89.0, self.pitch + delta.y() * 0.6))
+            self.yaw -= delta.x() * 0.6
+            self.pitch = max(-89.5, min(89.5, self.pitch + delta.y() * 0.6))
         elif event.buttons() & Qt.RightButton:
-            self.pan_x += delta.x() * 0.005 * self.distance
-            self.pan_y -= delta.y() * 0.005 * self.distance
+            # 沿屏幕的右/上方向平移目标点（Z-up 下屏幕上方不是世界 Y）
+            direction = self._eye_direction()
+            right = np.cross(direction, (0.0, 0.0, 1.0))
+            norm = float(np.linalg.norm(right))
+            right = right / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
+            up = np.cross(right, direction)
+            scale = 0.005 * self.distance
+            self.target = self.target - delta.x() * scale * right + delta.y() * scale * up
         self.update()
 
     def wheelEvent(self, event):
@@ -263,6 +302,7 @@ class ViewerWindow(QMainWindow):
         self.fps = 8.0
         self.index = 0
         self.status_hint = ""
+        self.colorscheme = None   # None = 用库当前配色
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._advance)
         self._build_menus()
@@ -332,14 +372,27 @@ class ViewerWindow(QMainWindow):
         self._add_action(file_menu, "导出当前帧 STL…", self._export_stl, QKeySequence("Ctrl+S"))
         self._add_action(file_menu, "导出当前帧 PNG（引擎渲染）…", self._export_png, QKeySequence("Ctrl+E"))
         self._add_action(file_menu, "保存视图截图…", self._save_screenshot, QKeySequence("Ctrl+Shift+S"))
+        self._add_action(file_menu, "导出整个视图序列 PNG…（按当前视角）", self._export_frames_png)
         file_menu.addSeparator()
         self._add_action(file_menu, "退出", self.close, QKeySequence("Ctrl+Q"))
 
         view_menu = bar.addMenu("视图(&V)")
         self._add_action(view_menu, "重置视角", self._reset_view, QKeySequence("Home"))
+        presets = view_menu.addMenu("视角预设")
+        for label, (yaw, pitch) in (
+            ("前视图", (-90.0, 0.0)),
+            ("右视图", (0.0, 0.0)),
+            ("俯视图", (-90.0, 89.5)),
+            ("等轴测", (-60.0, 30.0)),
+        ):
+            self._add_action(presets, label, lambda checked=False, y=yaw, p=pitch: self._set_preset(y, p))
         self.ortho_action = QAction("正交投影", self, checkable=True)
         self.ortho_action.toggled.connect(self._toggle_ortho)
         view_menu.addAction(self.ortho_action)
+        scheme_menu = view_menu.addMenu("配色方案")
+        self._add_action(scheme_menu, "默认（库当前配色）", lambda: self.set_colorscheme(None))
+        for name in _color_schemes():
+            self._add_action(scheme_menu, name, lambda checked=False, n=name: self.set_colorscheme(n))
 
         self.anim_menu = bar.addMenu("动画(&A)")
         self.play_action = QAction("播放 / 暂停", self)
@@ -413,10 +466,39 @@ class ViewerWindow(QMainWindow):
         if isinstance(self.view, Interactive3D):
             self.view.reset_view()
 
+    def _set_preset(self, yaw, pitch):
+        if isinstance(self.view, Interactive3D):
+            self.view.set_view(yaw, pitch)
+
     def _toggle_ortho(self, checked):
         if isinstance(self.view, Interactive3D):
             self.view.orthographic = checked
             self.view.update()
+
+    def set_colorscheme(self, name):
+        """切换配色：重新取逐面颜色并重传缓冲。
+
+        注意配色是**全局**的（上游 set_render_color_scheme 语义）。动画下要逐帧重新求值，
+        帧多时会慢（状态栏会给提示）。
+        """
+        self.colorscheme = name
+        if not isinstance(self.view, Interactive3D):
+            return
+        self.statusBar().showMessage(f"切换配色 {name or '默认'} …")
+        QApplication.processEvents()
+        source = self.frame_fn if self.frame_fn is not None else (lambda _index: self.shape)
+        for index, mesh in enumerate(self.view.meshes):
+            colors = _face_colors(source(index), name)
+            n_triangles = len(mesh["points"]) // 3
+            if colors is not None and len(colors) == n_triangles * 4:
+                rgb = np.frombuffer(colors, np.uint8).reshape(-1, 4)[:, :3].astype(np.float32) / 255.0
+                mesh["colors"] = np.repeat(rgb, 3, axis=0)
+        if self.view.vertex_buffer is not None:
+            self.view.vertex_buffer.bind()
+            self.view._upload()
+            self.view.vertex_buffer.release()
+        self.view.update()
+        self._refresh_status()
 
     # ------------------------------------------------------------------ 文件
     def _current_source(self):
@@ -453,6 +535,31 @@ class ViewerWindow(QMainWindow):
         image = self.view.grabFramebuffer() if hasattr(self.view, "grabFramebuffer") else None
         if image is None or not image.save(path):
             QMessageBox.warning(self, "保存失败", "这个视图不支持截图。")
+
+    def _export_frames_png(self):
+        """按当前视角逐帧截图，导出 PNG 序列（与窗口所见一致：走 GL 截图而非引擎渲染）。"""
+        if self.view is None or not hasattr(self.view, "grabFramebuffer"):
+            QMessageBox.information(self, "导出序列", "当前视图不支持截图。")
+            return
+        directory = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        if not directory:
+            return
+        was_playing = self.timer.isActive()
+        if was_playing:
+            self.timer.stop()
+        total = max(self.frames, 1)
+        try:
+            for index in range(total):
+                if self.frames:
+                    self._goto(index)
+                QApplication.processEvents()
+                self.view.grabFramebuffer().save(os.path.join(directory, f"view{index:03d}.png"))
+        except Exception as exc:  # 导出失败不该让窗口崩
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+        if was_playing:
+            self.timer.start()
+        QMessageBox.information(self, "导出完成", f"已保存 {total} 张到 {directory}")
 
     def _about(self):
         from PySide6 import __version__ as pyside_version
