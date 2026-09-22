@@ -37,3 +37,11 @@ jobs:
 
       - name: Example fidelity (48 upstream examples)
         run: PYTHONPATH=py python3 py/verify_examples.py
+
+      - name: Package the wheel and smoke-test the installed copy
+        run: |
+          bash scripts/build_wheel.sh
+          python3 -m venv /tmp/mozvenv
+          /tmp/mozvenv/bin/pip install --quiet --no-deps build/dist/moz_openscad-*.whl
+          # 在仓库外跑，确保只用 site-packages 里的 .so 与 moz_data/
+          cd /tmp && /tmp/mozvenv/bin/python "$GITHUB_WORKSPACE/scripts/smoke_installed.py"
