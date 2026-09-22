@@ -1,7 +1,7 @@
 """OpenSCAD examples/Advanced/surface_image.scad 的 Python 版本。
 
 原文件用 surface() 读同目录的高度图表面（像素灰度 → 0..100 的高度），
-再沿 Z 方向取 3 层剖面叠起来。外部文件与 .scad 引用的完全是同一个。
+再沿 Z 方向取 3 层剖面叠起来。外部文件与 .scad 引用的是同一份内容。
 """
 
 import sys
@@ -11,9 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import moz_openscad as moz
 
 # .scad 里写的是相对文件名 surface_image.png（相对它自己所在目录）；
-# Python 版直接指向原始示例目录里的同一个文件，不做拷贝。
-REPO = Path(__file__).resolve().parents[3]
-SURFACE_IMAGE = str(REPO / "3rd" / "openscad" / "examples" / "Advanced" / "surface_image.png")
+# 该文件已随包复制到 moz_data/examples/Advanced/ 下（与上游同名）。
+SURFACE_IMAGE = moz.data_path("examples", "Advanced", "surface_image.png")
 
 
 def build():

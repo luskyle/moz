@@ -14,7 +14,29 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "py"}
-py-modules = ["moz_openscad", "moz_viewer", "demo"]
+py-modules = ["moz_openscad", "moz_viewer", "moz_drawing", "demo"]
+# moz_data 只放运行时数据（配色方案、字体、MCAD 库、示例数据、预编译 .so）
+packages = ["moz_data"]
+include-package-data = true
+
+# wheel 里要带的数据；lib/ 下的 libmozopenscad.so 由 scripts/build_wheel.sh 拷进来
+[tool.setuptools.package-data]
+# 顶层模块的类型存根（PEP 561）：要和 moz_openscad.py 一起放到 wheel 根目录
+"*" = ["*.pyi"]
+moz_data = [
+    "color-schemes/*",
+    "color-schemes/render/*",
+    "color-schemes/editor/*",
+    "fonts/*",
+    "fonts/Liberation-2.00.1/*",
+    "fonts/Liberation-2.00.1/ttf/*",
+    "libraries/MCAD/*",
+    "examples/Basics/*",
+    "examples/Advanced/*",
+    "examples/Parametric/*",
+    "examples/Old/*",
+    "lib/*",
+]
 
 [project.scripts]
 moz-demo = "demo:main"

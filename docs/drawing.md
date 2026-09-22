@@ -84,7 +84,7 @@ drawing.show()                   # 用预览器的 2D 视图看（可缩放/平�
 - `content_bbox()` / `fits(tolerance=)`：版式自查（内容出框时 `fits()` 为 False）。
   线宽会让贴边几何略微越界，惯例留一个线宽容差（`fits(tolerance=dw.THICK_WIDTH)`）。
 - 文字字体：`Drawing(font=)` 定整张图，`add_note(..., font=)`、`add_view(..., label=)`、
-  `dim(...)` 的文字都跟随它（也能单独覆盖）。默认 `TEXT_FONT = "Moz Sans SC"`——随仓库分发的
+  `dim(...)` 的文字都跟随它（也能单独覆盖）。默认 `TEXT_FONT = "Moz Sans SC"`——随包分发的
   中文字库子集；**不要**把字体退回引擎默认（`font=""`），它只有拉丁字形，中文会静默变成空心方框。
   传 `font="<fontconfig 家族名>"`（如 `"Noto Sans CJK SC"`）可换成系统字体。
 

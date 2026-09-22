@@ -43,9 +43,9 @@ _EDGE_COLOR = np.asarray([0.10, 0.12, 0.15], dtype=np.float32)
 
 def _color_schemes():
     """资源目录里可用的渲染配色方案名（`color-schemes/render/*.json` 的 name 字段）。"""
-    root = os.environ.get("MOZ_OPENSCAD_RESOURCE_DIR") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "3rd", "openscad")
-    directory = os.path.join(root, "color-schemes", "render")
+    import moz_openscad as moz
+    root = os.environ.get("MOZ_OPENSCAD_RESOURCE_DIR") or moz.DATA_DIR
+    directory = os.path.join(root, "color-schemes", "render") if root else ""
     names = []
     try:
         entries = sorted(os.listdir(directory))

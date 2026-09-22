@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""生成 moz 自带的中文字库子集：``assets/fonts/MozSansSC-Regular.ttf``。
+"""生成 moz 自带的中文字库子集：``py/moz_data/fonts/MozSansSC-Regular.ttf``。
 
 **为什么要自带**：引擎通过 fontconfig 按「家族名」找字体，机器上没有中文字体时
 ``text()`` **不报错**，而是静默画出空心方框（引擎内置的默认字体 ``Liberation Sans``
-只有拉丁字形）。把一份子集字体放进仓库，并在 import 时用 ``OPENSCAD_FONT_PATH``
+只有拉丁字形）。把一份子集字体随包分发，并在 import 时用 ``OPENSCAD_FONT_PATH``
 注册（见 ``py/moz_openscad.py``），任何机器上都能出中文。
 
 - 来源：Noto Sans CJK SC（SIL OFL 1.1，可商用、可再分发），只保留常用字符；
-- 改名为 ``Moz Sans SC``：不与系统里的完整 Noto 抢名字——系统有 Noto 时用系统那份
-  （字符覆盖更全），没有时回退到本文件；
+- 改名为 ``Moz Sans SC``：与系统里的完整 Noto 并存、不会互相抢名字；要用系统那份把
+  ``font=`` 指过去即可（``moz_drawing.TEXT_FONT`` 默认用本文件，保证任何机器上渲染一致）；
 - 字符集：ASCII + Latin-1 + 常用标点/符号 + GB2312 一级+二级汉字（6763 字）；
 - **输出可复现**：同一份输入字体 + 固定字符集，重复执行得到逐字节相同的文件。
 
@@ -34,8 +34,8 @@ DEFAULT_SOURCE = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 DEBIAN_COPYRIGHT = "/usr/share/doc/fonts-noto-cjk/copyright"
 SOURCE_FAMILY = "Noto Sans CJK SC"
 
-OUT_FONT = os.path.join(ROOT, "assets", "fonts", "MozSansSC-Regular.ttf")
-OUT_LICENSE = os.path.join(ROOT, "assets", "fonts", "MozSansSC-LICENSE.txt")
+OUT_FONT = os.path.join(ROOT, "py", "moz_data", "fonts", "MozSansSC-Regular.ttf")
+OUT_LICENSE = os.path.join(ROOT, "py", "moz_data", "fonts", "MozSansSC-LICENSE.txt")
 
 # 子集里改用的名字（不是 Noto 的保留字体名，也不会盖住系统的完整 Noto）
 FAMILY = "Moz Sans SC"
@@ -129,7 +129,7 @@ def write_license(source_family):
         )
     with open(OUT_LICENSE, "w", encoding="utf-8") as handle:
         handle.write(
-            f"{OUT_LICENSE} —— {FAMILY}\n"
+            f"{os.path.relpath(OUT_LICENSE, ROOT)} —— {FAMILY}\n"
             f"\n"
             f"本字体是 {source_family} 的子集（字符集裁剪、名字改写，字形轮廓未改动），\n"
             f"由 scripts/make_cjk_subset_font.py 生成，随 moz 一起分发。\n"

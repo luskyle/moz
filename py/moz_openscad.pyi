@@ -1,7 +1,8 @@
 """moz_openscad 的类型存根（PEP 561）。
 
 模块名是 ``moz_openscad``（顶层模块，不是包），所以存根文件名是 ``moz_openscad.pyi``。
-注意：把它随 wheel 一起分发还需要打包工作（见 docs/roadmap.md §1）。
+打包时由 ``setup.py`` 的 ``bdist_wheel`` 子类补进 wheel（``package-data`` 管不到顶层模块
+旁边的文件），见 docs/build.md。
 """
 
 from array import array as _array

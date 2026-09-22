@@ -18,8 +18,10 @@
 - [x] **测试**：`py/tests/`（pytest，95 个用例），覆盖 measure/查询数值、eval/export 往返、取值通道、
       动画帧、库路径、网格/颜色、`Shape` 缓存、错误路径、viewer 逻辑（不 show 窗口）。
 - [x] **CI**：`.github/workflows/ci.yml` —— 装依赖 → 构建 `.so` → `ruff check` → pytest → 48 示例保真度。
-- [x] **打包**：**决定不把 `.so` 打进平台 wheel**（依赖 CGAL/OpenCSG/Qt，需 manylinux 与多套 wheel，
-      收益小于维护成本）；改为在 [build.md](build.md) 写清「安装后配置」。
+- [x] **打包**：**把 `.so` 与运行时数据一起打进平台 wheel**（`py3-none-linux_x86_64` 这种：
+      纯 C ABI 的 `.so` 不需要 cp3xx 标签，但平台标签必须对上）。数据（配色方案、字体、MCAD 库、
+      示例数据）复制到 `py/moz_data/`，由 `scripts/build_wheel.sh` 打包、`scripts/smoke_installed.py`
+      在干净 venv 里验证；`.so` 仍依赖系统 CGAL/OpenCSG/Qt，见 [build.md](build.md)。
 - [x] **lint/format**：`pyproject.toml` 加 `[tool.ruff]`（E/F/W/I/UP/B，排除 `3rd`/`build`/`py/examples`），
       `ruff check .` 已全绿，并接入 CI。
 

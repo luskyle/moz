@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 ``3rd/openscad/libraries/MCAD/fonts.scad`` 的替代实现（自带版权字形表）。
+"""生成 ``py/moz_data/libraries/MCAD/fonts.scad``（自带版权的字形表）。
 
 **为什么要自己生成**：上游 MCAD 的 ``fonts.scad``（Andrew Plumb）是 LGPL 2.1，而项目里
 只用到它的 ``8bit_polyfont()``（唯一使用者是 ``Old/example023``）。这里用随引擎一起分发、
@@ -7,8 +7,9 @@ SIL OFL 1.1 的 Liberation Sans 重新生成一份**同接口**的字形表：``
 返回值结构、256 项索引、``search()`` 需要的那一列都与上游一致，所以
 ``use <MCAD/fonts.scad>`` 照常可用，而许可换成 OFL（可商用、无 copyleft）。
 
-字形坐标沿用 MCAD 的约定：8×8 的格子，基线在 y≈1.79、cap 高到 y≈7.66（字形轮廓数据本身
-按 OFL 1.1 授权，见 docs/third-party.md）。
+输出放在随包分发的数据目录里；引擎会把 ``<资源路径>/libraries`` 加进 SCAD 库搜索路径
+（资源路径 = ``py/moz_data``，见 ``py/moz_openscad.py``），因此 ``use <MCAD/fonts.scad>``
+不需要额外设 ``OPENSCADPATH``。
 
 只提供 ``8bit_polyfont()``；上游那个文件里的 ``polytext()`` / ``outline_2d()`` /
 ``braille_*`` 不在这里实现（仓库里没有任何地方用到，需要时请装完整 MCAD 库）。
@@ -28,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_FONT = os.path.join(
     ROOT, "3rd", "openscad", "fonts", "Liberation-2.00.1", "ttf", "LiberationSans-Regular.ttf"
 )
-OUT = os.path.join(ROOT, "3rd", "openscad", "libraries", "MCAD", "fonts.scad")
+OUT = os.path.join(ROOT, "py", "moz_data", "libraries", "MCAD", "fonts.scad")
 
 CELL = 8.0             # MCAD 的字符格：8×8
 CURVE_SAMPLES = 6      # 每段二次贝塞尔采样点数

@@ -17,11 +17,11 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import moz_openscad as moz
 
-PARAMETER_FILE = ROOT / "3rd" / "openscad" / "examples" / "Parametric" / "candleStand.json"
+# 参数集文件已随包复制到 moz_data/examples/Parametric/ 下（与上游同名）
+PARAMETER_FILE = Path(moz.data_path("examples", "Parametric", "candleStand.json"))
 
 # 原文件里的默认值
 DEFAULTS = {

@@ -5,9 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import moz_openscad as moz
 
-# 原 .scad 与本文件用同一个数据文件（3rd/openscad/examples/Old/ 下），
+# 数据文件随包分发在 moz_data/examples/Old/ 下（与上游示例目录同名，已复制一份），
 # Python 版求值没有文档目录，必须写绝对路径。
-DATA = Path(__file__).resolve().parents[3] / "3rd" / "openscad" / "examples" / "Old"
+DATA = Path(moz.data_path("examples", "Old"))
 
 
 def build():

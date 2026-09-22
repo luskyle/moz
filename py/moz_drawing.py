@@ -10,7 +10,7 @@
 坐标约定：图面坐标就是 SCAD 的 XY 平面，单位 mm，+Y 向上（导出 SVG 时 y 轴翻转由引擎处理）。
 线宽用极扁的矩形近似（2D 几何只有填充多边形，没有描边概念），默认 0.25 mm ≈ ISO 细线。
 
-文字默认用随仓库分发的 ``Moz Sans SC``（``TEXT_FONT``，见 docs/drawing.md）：引擎自带的
+文字默认用随包分发的 ``Moz Sans SC``（``TEXT_FONT``，见 docs/drawing.md）：引擎自带的
 默认字体只有拉丁字形，中文会静默变成空心方框；换字体传 ``font="<fontconfig 家族名>"``，
 ``font=""`` 退回引擎默认字体。
 
@@ -38,7 +38,7 @@ DIM_TEXT_SIZE = 3.0        # 尺寸文字
 HATCH_SPACING = 3.0        # 剖面线间距
 HATCH_ANGLE = 45.0         # 剖面线角度
 
-# 文字用的字体（fontconfig 家族名）。默认用随仓库分发的 Moz Sans SC：引擎自带的默认字体
+# 文字用的字体（fontconfig 家族名）。默认用随包分发的 Moz Sans SC：引擎自带的默认字体
 # 只有拉丁字形，中文会**静默**变成空心方框，而系统有没有中文字体不可控。想换成系统里
 # 覆盖更全的字体，传 font="Noto Sans CJK SC" 之类即可；传 font="" 退回引擎默认字体。
 TEXT_FONT = "Moz Sans SC"

@@ -48,27 +48,49 @@ import ctypes as C
 import math
 import os
 
-# OpenSCAD 的资源目录（color-schemes/*.json、locale 等）靠应用路径向上查找定位；
-# 共享库没有可用的应用路径，所以这里按仓库布局把它指到 vendored 的 3rd/openscad。
-# 装成 wheel 后该目录不存在，就交给调用方用 MOZ_OPENSCAD_RESOURCE_DIR 指定。
-_RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "3rd", "openscad")
-if os.path.isdir(os.path.join(_RESOURCE_DIR, "color-schemes")):
-    os.environ.setdefault("MOZ_OPENSCAD_RESOURCE_DIR", os.path.abspath(_RESOURCE_DIR))
 
-# 自带的中文字库（assets/fonts，见 docs/python-api.md）：引擎按「家族名」向 fontconfig
-# 要字体，机器上没装中文字体时 text() 不报错、而是静默画出空心方框。把随仓库分发的
-# 字库目录追加进 OPENSCAD_FONT_PATH（不改调用方已有的值），任何机器上都能出中文。
-_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "fonts")
-if os.path.isdir(_FONT_DIR):
-    _font_dir_abs = os.path.abspath(_FONT_DIR)
-    if _font_dir_abs not in (os.environ.get("OPENSCAD_FONT_PATH") or "").split(os.pathsep):
+# 运行时数据都在随包分发的 py/moz_data/ 下（打包时连同 libmozopenscad.so 一起进 wheel）：
+#   moz_data/color-schemes/   引擎按「资源基础路径」枚举 <base>/color-schemes/render/*.json
+#   moz_data/fonts/           引擎自带字体（Liberation）+ 自带的 Moz Sans SC 中文字库
+#   moz_data/libraries/       引擎会把 <资源>/libraries 加进库搜索路径 → use <MCAD/...> 可用
+#   moz_data/examples/        示例引用的外部数据文件（dxf/dat/stl/png/json）
+#   moz_data/lib/             预编译的 libmozopenscad.so（构建 wheel 时拷进来，不入库）
+# 仓库布局（3rd/openscad）留作兜底，让还没拷贝数据的检出也能跑。
+def _data_root():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.path.join(here, "moz_data"), os.path.join(here, "..", "3rd", "openscad")):
+        if os.path.isdir(os.path.join(candidate, "color-schemes")):
+            return os.path.abspath(candidate)
+    return None
+
+
+# 运行时数据目录：moz_data 优先，没有则回退到 vendored 的 3rd/openscad。示例、测试、验证脚本
+# 都用 data_path() 取外部数据文件，因此不依赖仓库布局。
+DATA_DIR = _data_root()
+
+if DATA_DIR:
+    # 共享库没有可用的应用路径，资源目录（配色方案等）靠这个变量定位
+    os.environ.setdefault("MOZ_OPENSCAD_RESOURCE_DIR", DATA_DIR)
+    # 引擎按「家族名」向 fontconfig 要字体，机器上没装中文字体时 text() 不报错、只画空心方框；
+    # 把数据包里的字体目录追加进 OPENSCAD_FONT_PATH（不改调用方已有的值）。
+    _font_dir = os.path.join(DATA_DIR, "fonts")
+    if _font_dir not in (os.environ.get("OPENSCAD_FONT_PATH") or "").split(os.pathsep):
         _existing = os.environ.get("OPENSCAD_FONT_PATH")
-        os.environ["OPENSCAD_FONT_PATH"] = f"{_existing}{os.pathsep}{_font_dir_abs}" if _existing else _font_dir_abs
+        os.environ["OPENSCAD_FONT_PATH"] = f"{_existing}{os.pathsep}{_font_dir}" if _existing else _font_dir
+
+
+def data_path(*parts):
+    """运行时数据文件的绝对路径，例如 ``data_path("examples", "Old", "example007.dxf")``。"""
+    if not DATA_DIR:
+        raise OpenSCADError("找不到运行时数据目录（moz_data/ 或 3rd/openscad）")
+    return os.path.join(DATA_DIR, *parts)
+
 
 __all__ = [
     "eval_text", "eval_file", "dump", "dump_file", "value", "number", "vector",
     "eval_animation", "add_library_path", "library_paths", "show_animation", "show_parts",
     "Geometry", "OpenSCADError", "Shape", "Part", "RenderOptions", "Measure",
+    "DATA_DIR", "data_path",
     "cube", "sphere", "cylinder", "circle",
     "square", "polygon", "text", "polyhedron", "union", "difference", "intersection",
     "translate", "rotate", "scale", "mirror", "resize", "multmatrix", "hull", "minkowski",
@@ -967,7 +989,11 @@ def _find_lib():
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(here, "libmozopenscad.so"),
+        # 仓库里 build/lib 永远是最新的构建（打包也是从它拷贝），所以先于随包的副本：
+        # 否则重构建后 py/moz_data/lib 里的旧副本会把它遮蔽掉
         os.path.join(here, "..", "build", "lib", "libmozopenscad.so"),
+        # 装成 wheel 后只有这一份
+        os.path.join(here, "moz_data", "lib", "libmozopenscad.so"),
     ]
     for p in candidates:
         if os.path.exists(p):

@@ -109,7 +109,8 @@ translate([0, 0, 6 * sin(360 * $t)]) sphere(2);
 
 `.scad` 里的 `import(file = "x.dxf")` 相对**它自己所在目录**解析；
 而我们 Python 侧是通过 `eval_text` 拼源码求值的，没有文档目录 → 写相对名会**静默返回空几何**。
-一律写绝对路径（指向 `3rd/openscad/examples/<分类>/` 里的同一份数据）。
+一律写绝对路径（`PYTHONPATH=py` 下用 `moz.data_path("examples", "<分类>", "x.dxf")` 取——那就是
+从上游示例目录复制到 `py/moz_data/examples/` 的同一份数据）。
 
 顺带：C ABI 早期版本在 `moz_eval_file("相对路径")` 时 chdir 到文档目录却又用相对文档名解析兄弟文件，
 也会静默变空——已修（路径先绝对化）。记住原理即可。
@@ -144,6 +145,7 @@ Python 侧预览器也据此判断（否则会去建一个空网格）。
 ## 16. MCAD 之类的子模块不在 OpenSCAD 源码包里
 
 `3rd/openscad/libraries/MCAD/` 在源码包里是**空目录**（上游用 submodule 管理），
-`tests/` 目录也依赖它。本项目在 `libraries/MCAD/fonts.scad` 放了一份自研的 drop-in
-（只实现 `8bit_polyfont()`，见 [third-party.md](third-party.md)），因此 `Old/example023.scad`
-能直接跑出几何；上游那份 MCAD 文件里的 `polytext()` / `braille_*` 等模块没有实现。
+`tests/` 目录也依赖它。本项目把自研的 drop-in 放在随包数据目录
+（`py/moz_data/libraries/MCAD/fonts.scad`，只实现 `8bit_polyfont()`，见 [third-party.md](third-party.md)），
+因此 `Old/example023.scad` 能直接跑出几何（引擎会把 `<资源>/libraries` 加进库搜索路径）；
+上游那份 MCAD 文件里的 `polytext()` / `braille_*` 等模块没有实现。

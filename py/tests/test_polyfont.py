@@ -1,4 +1,4 @@
-"""自带字形表（3rd/openscad/libraries/MCAD/fonts.scad 的 drop-in）的契约测试。
+"""自带字形表（moz_data/libraries/MCAD/fonts.scad 的 drop-in）的契约测试。
 
 这份文件是 ``scripts/gen_mcad_polyfont.py`` 生成的自研数据（上游 MCAD 那份是 LGPL 2.1，
 这里换成 OFL）。它必须与上游同接口，否则 ``Old/example023`` 会悄悄退化：
@@ -16,14 +16,18 @@ from pathlib import Path
 
 import pytest
 
-FONTS = Path(__file__).resolve().parents[2] / "3rd" / "openscad" / "libraries" / "MCAD" / "fonts.scad"
+
+def fonts_path(moz):
+    """随包分发的字形表（moz_data/libraries/MCAD/fonts.scad）。"""
+    return Path(moz.data_path("libraries", "MCAD", "fonts.scad"))
 
 
 @pytest.fixture(scope="module")
 def table(moz):
-    if not FONTS.exists():
-        pytest.skip(f"缺少字形表 {FONTS}")
-    return moz.vector("8bit_polyfont()", f"use <{FONTS}>\n")
+    path = fonts_path(moz)
+    if not path.exists():
+        pytest.skip(f"缺少字形表 {path}")
+    return moz.vector("8bit_polyfont()", f"use <{path}>\n")
 
 
 def test_table_shape_matches_upstream(table):
@@ -40,7 +44,7 @@ def test_search_column_is_the_character(table):
 
 
 def test_search_one_and_twelve_like_the_example(moz, table):
-    source = f"use <{FONTS}>\n"
+    source = f"use <{fonts_path(moz)}>\n"
     assert moz.vector('search("one", 8bit_polyfont()[2], 1, 1)', source) == [ord(c) for c in "one"]
     assert moz.vector('search("twelve", 8bit_polyfont()[2], 1, 1)', source) == [ord(c) for c in "twelve"]
 

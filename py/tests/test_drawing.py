@@ -7,6 +7,7 @@
 from pathlib import Path
 
 import moz_drawing as dw
+import moz_openscad
 import pytest
 
 
@@ -250,11 +251,11 @@ def test_unsupported_dimension_kind(moz):
 # --- 字体 ---
 #
 # 引擎的默认字体（内置 Liberation Sans）只有拉丁字形，中文会**静默**变成空心方框，
-# 所以制图层默认指到随仓库分发的 Moz Sans SC。缺字形时每字恰好画 8 个面（方框）。
+# 所以制图层默认指到随包分发的 Moz Sans SC。缺字形时每字恰好画 8 个面（方框）。
 
-BUNDLED_FONT_DIR = Path(dw.__file__).resolve().parents[1] / "assets" / "fonts"
+BUNDLED_FONT_DIR = Path(moz_openscad.DATA_DIR or "") / "fonts"
 needs_bundled_font = pytest.mark.skipif(
-    not BUNDLED_FONT_DIR.is_dir(), reason="自带字库 assets/fonts 不存在（见 scripts/make_cjk_subset_font.py）"
+    not BUNDLED_FONT_DIR.is_dir(), reason="自带字库 moz_data/fonts 不存在（见 scripts/make_cjk_subset_font.py）"
 )
 
 

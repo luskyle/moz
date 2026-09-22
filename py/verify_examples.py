@@ -41,8 +41,8 @@ SCAD_ROOT = ROOT / "3rd" / "openscad" / "examples"
 PY_ROOT = ROOT / "py" / "examples"
 
 # Old/example023 的 .scad 用 use <MCAD/fonts.scad>，上游把 OpenSCAD 的 libraries
-# 目录当库搜索路径；这里的 vendored 副本走 OPENSCADPATH（必须在首次加载库之前设好）。
-os.environ.setdefault("OPENSCADPATH", str(ROOT / "3rd" / "openscad" / "libraries"))
+# 目录当库搜索路径；这里用随包分发的那份（moz_data/libraries），必须在首次加载库之前设好。
+os.environ.setdefault("OPENSCADPATH", str(ROOT / "py" / "moz_data" / "libraries"))
 
 sys.path.insert(0, str(ROOT / "py"))
 import moz_openscad as moz  # noqa: E402
@@ -143,7 +143,7 @@ def _missing_prerequisite(category, name):
     """示例依赖的外部数据/库是否齐备（缺了就没法验证，报 SKIP 而不是 FAIL）。"""
     required = {
         # Old/example023 依赖 MCAD 库（不在 OpenSCAD 源码包里，见 README 说明）
-        ("Old", "example023"): [ROOT / "3rd" / "openscad" / "libraries" / "MCAD" / "fonts.scad"],
+        ("Old", "example023"): [ROOT / "py" / "moz_data" / "libraries" / "MCAD" / "fonts.scad"],
     }.get((category, name), [])
     return [path for path in required if not path.exists()]
 

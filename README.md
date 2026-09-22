@@ -10,7 +10,6 @@
 > * 装配关系与运动：间隙、配合、行程；
 > * 制造要求：公差、表面粗糙度、材料、热处理。
 
->
 > 所以自然语言适合说“要什么”，不适合直接定义“几何长什么样”。
 >
 > 2D工程图纸不是普通2D图片，而是一套 **符号化、标准化的技术语言** 。它通常包含：
@@ -51,27 +50,27 @@
 
 ```
 py/                      Python 层：建模 API（moz_openscad）+ 2D 制图（moz_drawing）+ 预览器（moz_viewer）+ 示例与验证脚本
+py/moz_data/             随包分发的运行时数据：配色方案、字体、MCAD 库、示例数据、预编译 .so（.so 不入库）
 3rd/openscad/src/moz/    C ABI（本项目唯一新增的 C++），编译成 libmozopenscad.so
-3rd/openscad/            vendored 的 OpenSCAD 2021.01 源码（含自研的 libraries/MCAD/fonts.scad 字形表）
-assets/fonts/            自带中文字库子集（OFL 1.1，脚本生成）
-scripts/                 构建脚本、字库/字形表生成脚本
+3rd/openscad/            vendored 的 OpenSCAD 2021.01 源码
+scripts/                 构建、打包、字库/字形表生成脚本
 build/                   构建目录与产物（未入库）
 docs/                    文档
 ```
 
-| 能力 | 入口 |
-| --- | --- |
-| 用 Python 拼模型并导出 STL/3MF/OFF/AMF/DXF/SVG/PDF/PNG | `py/moz_openscad.py` |
-| 交互预览（3D 旋转/缩放，颜色来自 `color()`） | `shape.show()` / `py/moz_viewer.py` |
-| 直接调 C ABI（25 个函数） | `3rd/openscad/src/moz/moz_api.h` |
-| 从引擎里取值（`dxf_dim`/`rands`/`lookup`/`version`…，全精度） | `moz.value()` / `moz.number()` / `moz.vector()` |
-| 逐面颜色（与导出的 STL 三角面一一对应） | `Geometry.face_colors()` |
-| 几何测量（包围盒/体积/表面积/面数/顶点数/质心） | `Geometry.measure` |
-| 截面 / 轮廓投影（任意视线方向的切平面 → 2D） | `moz.section()` / `moz.outline()` / `moz.view_basis()` |
-| 2D 工程图（视图、剖视、尺寸标注、图框标题栏；导出 SVG/DXF/PDF） | `py/moz_drawing.py`，示例 `py/drawing_demo.py` |
-| 动画帧（逐帧设 `$t` 并回调，对应上游 `--animate`） | `moz.eval_animation()` |
-| 库搜索路径运行时接口 | `moz.add_library_path()` / `moz.library_paths()` |
-| 校验「Python 版和原生 `.scad` 是不是同一个几何」 | `py/verify_examples.py` |
+| 能力                                                                   | 入口                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 用 Python 拼模型并导出 STL/3MF/OFF/AMF/DXF/SVG/PDF/PNG                 | `py/moz_openscad.py`                                       |
+| 交互预览（3D 旋转/缩放，颜色来自`color()`）                          | `shape.show()` / `py/moz_viewer.py`                      |
+| 直接调 C ABI（25 个函数）                                              | `3rd/openscad/src/moz/moz_api.h`                           |
+| 从引擎里取值（`dxf_dim`/`rands`/`lookup`/`version`…，全精度） | `moz.value()` / `moz.number()` / `moz.vector()`        |
+| 逐面颜色（与导出的 STL 三角面一一对应）                                | `Geometry.face_colors()`                                   |
+| 几何测量（包围盒/体积/表面积/面数/顶点数/质心）                        | `Geometry.measure`                                         |
+| 截面 / 轮廓投影（任意视线方向的切平面 → 2D）                          | `moz.section()` / `moz.outline()` / `moz.view_basis()` |
+| 2D 工程图（视图、剖视、尺寸标注、图框标题栏；导出 SVG/DXF/PDF）        | `py/moz_drawing.py`，示例 `py/drawing_demo.py`           |
+| 动画帧（逐帧设`$t` 并回调，对应上游 `--animate`）                  | `moz.eval_animation()`                                     |
+| 库搜索路径运行时接口                                                   | `moz.add_library_path()` / `moz.library_paths()`         |
+| 校验「Python 版和原生`.scad` 是不是同一个几何」                      | `py/verify_examples.py`                                    |
 
 ## 快速上手
 
@@ -125,20 +124,20 @@ PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py     # 或把任
 
 ## 文档
 
-| 主题 | 文档 |
-| --- | --- |
-| 索引与快速开始 | [docs/README.md](docs/README.md) |
-| 三层架构、数据流、对上游的改动清单 | [docs/architecture.md](docs/architecture.md) |
-| 构建、依赖、运行时环境变量、排错 | [docs/build.md](docs/build.md) |
-| C ABI 参考（逐函数语义/错误/内存所有权） | [docs/c-api.md](docs/c-api.md) |
-| Python API 参考 | [docs/python-api.md](docs/python-api.md) |
-| 截面与 2D 工程图（视图、剖视、尺寸标注、导出） | [docs/drawing.md](docs/drawing.md) |
-| 示例组织方式与迁移 `.scad` 的清单 | [docs/examples.md](docs/examples.md) |
-| 保真度验证方法、判据与当前结果 | [docs/verification.md](docs/verification.md) |
-| **SCAD 语义陷阱（实测清单）** | [docs/scad-semantics.md](docs/scad-semantics.md) |
-| 预览器 | [docs/viewer.md](docs/viewer.md) |
-| 现状与已知限制 | [docs/limitations.md](docs/limitations.md) |
-| 第三方组件与许可 | [docs/third-party.md](docs/third-party.md) |
+| 主题                                           | 文档                                            |
+| ---------------------------------------------- | ----------------------------------------------- |
+| 索引与快速开始                                 | [docs/README.md](docs/README.md)                 |
+| 三层架构、数据流、对上游的改动清单             | [docs/architecture.md](docs/architecture.md)     |
+| 构建、依赖、运行时环境变量、排错               | [docs/build.md](docs/build.md)                   |
+| C ABI 参考（逐函数语义/错误/内存所有权）       | [docs/c-api.md](docs/c-api.md)                   |
+| Python API 参考                                | [docs/python-api.md](docs/python-api.md)         |
+| 截面与 2D 工程图（视图、剖视、尺寸标注、导出） | [docs/drawing.md](docs/drawing.md)               |
+| 示例组织方式与迁移`.scad` 的清单             | [docs/examples.md](docs/examples.md)             |
+| 保真度验证方法、判据与当前结果                 | [docs/verification.md](docs/verification.md)     |
+| **SCAD 语义陷阱（实测清单）**            | [docs/scad-semantics.md](docs/scad-semantics.md) |
+| 预览器                                         | [docs/viewer.md](docs/viewer.md)                 |
+| 现状与已知限制                                 | [docs/limitations.md](docs/limitations.md)       |
+| 第三方组件与许可                               | [docs/third-party.md](docs/third-party.md)       |
 
 ## 路线
 
@@ -148,6 +147,15 @@ PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py     # 或把任
 ## 许可
 
 本仓库自有代码为 Apache-2.0（见 [LICENSE](LICENSE)）；vendored 的 OpenSCAD 内核为 GPLv2（含 CGAL 例外）；
-仓库里的两个字体资产——自研的 `libraries/MCAD/fonts.scad` 字形表与 `assets/fonts/MozSansSC-Regular.ttf`
-中文字库子集——均为 SIL OFL 1.1（可商用、可再分发）。链接出的 `libmozopenscad.so` 属于 GPL 派生物——
+仓库里的两个字体资产——自研的 `py/moz_data/libraries/MCAD/fonts.scad` 字形表与
+`py/moz_data/fonts/MozSansSC-Regular.ttf` 中文字库子集——均为 SIL OFL 1.1（可商用、可再分发）。
+链接出的 `libmozopenscad.so`（随平台 wheel 一起分发）属于 GPL 派生物——
 对外分发/服务化前请先确认许可义务，详见 [docs/third-party.md](docs/third-party.md)。
+
+## 打包
+
+```bash
+bash scripts/build_wheel.sh        # 平台 wheel：带 .so + 配色方案 + 字体 + MCAD 库 + 示例数据
+```
+
+wheel 里 `moz_data/` 装的就是上面这些运行时数据，装完即用（详见 [docs/build.md](docs/build.md)）。

@@ -1,18 +1,17 @@
 """OpenSCAD examples/Basics/projection.scad 的 Python 版本。
 
 投影的原始三维形体来自同目录的 projection.stl（原文件里 import("projection.stl")），
-Python 版指向原始示例目录里的同一个 STL，不做拷贝。
+该文件已随包复制到 moz_data/examples/Basics/ 下（与上游同名）。
 projection() 不带 cut 得到轮廓投影，带 cut = true 得到 Z = 0 处的剖面。
 """
 
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import moz_openscad as moz
 
-PROJECTION_STL = str(ROOT / "3rd" / "openscad" / "examples" / "Basics" / "projection.stl")
+PROJECTION_STL = moz.data_path("examples", "Basics", "projection.stl")
 
 
 def build():

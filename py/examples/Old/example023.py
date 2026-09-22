@@ -1,9 +1,9 @@
 """OpenSCAD examples/Old/example023.scad 的 Python 版本：用字形表排钟面。
 
 原文件的 ``use <MCAD/fonts.scad>`` 引入 OpenSCAD 的独立库 MCAD（不在 OpenSCAD 源码包
-里，需要单独取）。本仓库在 3rd/openscad/libraries/MCAD/fonts.scad 放了一份**自研的
-drop-in 实现**（只提供 ``8bit_polyfont()``，由 scripts/gen_mcad_polyfont.py 从随引擎
-分发的 OFL 字体生成，见 docs/third-party.md），所以原文件能直接跑；上游那份是 LGPL 2.1。
+里，需要单独取）。随包分发的 moz_data/libraries/MCAD/fonts.scad 是一份**自研的 drop-in
+实现**（只提供 ``8bit_polyfont()``，由 scripts/gen_mcad_polyfont.py 从随引擎分发的 OFL
+字体生成，见 docs/third-party.md），所以原文件能直接跑；上游那份是 LGPL 2.1。
 
 Python 版不做数据拷贝：字形表由引擎自己求值 ``use <...> 8bit_polyfont()`` 拿到
 （全精度），再按原文件的排版公式摆放 12 个小时单词。原文件用 SCAD 的
@@ -13,11 +13,11 @@ Python 版不做数据拷贝：字形表由引擎自己求值 ``use <...> 8bit_p
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import moz_openscad as moz
 
-MCAD_FONTS = ROOT / "3rd" / "openscad" / "libraries" / "MCAD" / "fonts.scad"
+# 引擎会自动把 <资源>/libraries 加进库搜索路径，这里仍用绝对路径 use，不依赖它
+MCAD_FONTS = Path(moz.data_path("libraries", "MCAD", "fonts.scad"))
 
 HOURS = ["one", "two", "three", "four", "five", "six",
          "seven", "eight", "nine", "ten", "eleven", "twelve"]
@@ -27,8 +27,8 @@ def font_table():
     """取出 MCAD 的 8bit_polyfont() 字形表（用绝对路径 use，不依赖库搜索路径）。"""
     if not MCAD_FONTS.exists():
         raise FileNotFoundError(
-            f"缺少 MCAD 字形库 {MCAD_FONTS}；原示例用 use <MCAD/fonts.scad> 引用它，"
-            f"从 OpenSCAD 的 MCAD 库仓库取 fonts.scad 放到该路径即可"
+            f"缺少字形库 {MCAD_FONTS}；它随包分发在 moz_data/libraries/MCAD/ 下，"
+            f"重新生成见 scripts/gen_mcad_polyfont.py"
         )
     return moz.vector("8bit_polyfont()", f"use <{MCAD_FONTS}>\n")
 

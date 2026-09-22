@@ -1,4 +1,4 @@
-/media/luskyle/DATA/project/moz/assets/fonts/MozSansSC-LICENSE.txt —— Moz Sans SC
+py/moz_data/fonts/MozSansSC-LICENSE.txt —— Moz Sans SC
 
 本字体是 Noto Sans CJK SC 的子集（字符集裁剪、名字改写，字形轮廓未改动），
 由 scripts/make_cjk_subset_font.py 生成，随 moz 一起分发。

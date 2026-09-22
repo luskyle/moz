@@ -1,3 +1,5 @@
 build/
 __pycache__/
 *.pyc
+# 打包时从 build/lib 拷进来的共享库（二进制不入库，见 scripts/build_wheel.sh）
+py/moz_data/lib/

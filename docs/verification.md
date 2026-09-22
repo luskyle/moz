@@ -73,5 +73,5 @@ module m() { a; b; }  m();   // 模块体（再多一层）
   不检查 `#`/`%` 的预览效果。
 - 某些示例原生求值很慢（`Old/example006`/`example024` 各约 30 s、`Basics/CSG-modules` 约 15 s），
   全量跑一次约 7 分钟。
-- 脚本需要能构建/加载 `libmozopenscad.so`；`Old/example023` 还需要 `3rd/openscad/libraries/MCAD/fonts.scad`
-  （仓库自带的 drop-in 字形表；缺了会报 `SKIP` 并说明）。
+- 脚本需要能构建/加载 `libmozopenscad.so`；`Old/example023` 还需要随包分发的字形表
+  `py/moz_data/libraries/MCAD/fonts.scad`（缺了会报 `SKIP` 并说明）。

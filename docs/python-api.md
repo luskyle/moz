@@ -228,15 +228,22 @@ drawing.export("pdf", "bracket.pdf")  # 也可 svg / dxf
 视图摆放/比例、剖面线、中心线、线性/直径/半径标注、图框标题栏、已知限制见 [drawing.md](drawing.md)；
 可运行示例 `PYTHONPATH=py python3 py/drawing_demo.py`。
 
-图纸上的文字默认用随仓库分发的 `Moz Sans SC`（`moz_drawing.TEXT_FONT`）；换字体传
+图纸上的文字默认用随包分发的 `Moz Sans SC`（`moz_drawing.TEXT_FONT`）；换字体传
 `font="<fontconfig 家族名>"`（`Drawing(font=)` / `add_note(..., font=)` / `dim(..., font=)`），
 传 `font=""` 退回引擎默认字体（只有拉丁字形，中文会静默变成空心方框）。
 
-## 10. 库路径解析
+## 10. 数据目录与库路径
 
-`MOZ_OPENSCAD_LIB` → 模块同目录 → `../build/lib/libmozopenscad.so`。
-资源目录（配色方案等）由 `MOZ_OPENSCAD_RESOURCE_DIR` 指定，import 时会按仓库布局自动填。
-详见 [build.md](build.md)。
+运行时数据（配色方案、字体、MCAD 库、示例数据）随包分发在 `moz_data/` 下：
+
+```python
+moz.DATA_DIR                              # 该目录（装在 site-packages 里或仓库中）
+moz.data_path("examples", "Old", "example007.dxf")   # 取外部数据文件的绝对路径
+```
+
+import 时会自动：把 `moz_data` 设为资源目录（`MOZ_OPENSCAD_RESOURCE_DIR`）、把 `moz_data/fonts`
+追加进 `OPENSCAD_FONT_PATH`、把 `moz_data/lib` 纳入 `.so` 搜索。`.so` 搜索顺序：
+`MOZ_OPENSCAD_LIB` → 模块同目录 → `../build/lib/` → `moz_data/lib/`。详见 [build.md](build.md)。
 
 ## 11. `Part` 与便利类（早期对象模型）
 
