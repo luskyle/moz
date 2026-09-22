@@ -42,7 +42,15 @@
       + 投影方式（`R = Lᵀ·M_lookAt` 反解欧拉角），引擎导出的 PNG 与所见一致（实测轮廓比 0.5% 内）。
 - [x] 几何查询：点包含 `contains_point`、点到表面距离 `distance_to_surface`、惯性张量 `inertia`
       （凸包已有建模原语 `moz.hull`）。
-- [ ] 截面 `slice`（切平面 → 2D 轮廓）—— 需要平面与 Nef 求交并产出新句柄，未做。
+- [x] 截面 `slice`（切平面 → 2D 轮廓）：`moz.section(obj, normal, through)` +
+      `moz.outline(obj, normal)` + `moz.view_basis()`——用「刚体变换把平面搬到 z=0，再
+      `projection(cut = true)`」实现，等价于平面 ∩ 实体，无需改 C++；解析对照见
+      `py/tests/test_section.py`。详见 [drawing.md](drawing.md)。
+- [x] **2D 制图层** `py/moz_drawing.py`：图框/标题栏、视图摆放与比例、剖面线、中心线、
+      线性/直径/半径尺寸标注（文字随尺寸线旋转）、版式自查 `fits()`，导出 SVG/DXF/PDF；
+      示例 `py/drawing_demo.py`，测试 `py/tests/test_drawing.py`。详见 [drawing.md](drawing.md)。
+- [ ] 制图的进阶项：自动布图与投影对齐、隐藏线/虚线、剖切位置符号、GD&T/公差/粗糙度符号、
+      多页图纸集（见 [drawing.md](drawing.md) 的「已知限制」）。
 - [x] `resize()` 封装（零 C++ 改动）+ 修饰符助手 `background`/`highlight`/`only`/`disable`（`%`/`#`/`!`/`*`）。
 - [x] 2D 交互：viewer 的 2D 改为 `QGraphicsView`（滚轮缩放、拖动平移、双击适应窗口）。
 - [x] **类型存根 `moz_openscad.pyi`**（对应 `__init__.pyi`）；`mypy` 校验通过。

@@ -34,3 +34,20 @@ def test_mutating_source_does_not_reuse_cache(moz):
     a = moz.cube(2)
     b = moz.cube(2)
     assert a._geometry() is not b._geometry()
+
+
+def test_eval_accepts_sources_without_trailing_semicolon(moz):
+    """Shape.eval() 必须和 _geometry() 一样先做源码规范化。
+
+    叶子/变换类源码（`cube(...)`、`translate(...) cube(...)`）不以 `}` 结尾，
+    不补分号会直接解析失败——曾经只有块状源码（union/difference）能 eval。
+    """
+    assert moz.cube(2).eval().measure.volume == pytest.approx(8.0)
+    assert moz.translate([3, 0, 0], moz.cube(2)).eval().measure.volume == pytest.approx(8.0)
+    assert moz.circle(2).eval().dimension == 2
+
+
+def test_eval_honours_variables(moz):
+    shape = moz.Shape("cube(n);", n=2)
+    assert shape.eval(n=3).measure.volume == pytest.approx(27.0)
+    assert shape.variables == {"n": 2}          # 不污染对象自身的变量

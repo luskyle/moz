@@ -64,6 +64,7 @@ __all__ = [
     "translate", "rotate", "scale", "mirror", "resize", "multmatrix", "hull", "minkowski",
     "background", "highlight", "only", "disable",
     "linear_extrude", "rotate_extrude", "offset", "projection", "color",
+    "section", "outline", "view_basis", "UP", "DOWN", "FRONT", "BACK", "LEFT", "RIGHT",
     "import_shape", "surface", "settings", "lookup",
     "sin_deg", "cos_deg", "tan_deg", "asin_deg", "acos_deg", "atan_deg", "atan2_deg",
     "Box", "Cylinder", "Sphere", "Plate", "Hole", "Bracket",
@@ -71,6 +72,14 @@ __all__ = [
 
 _c_char_p = C.c_char_p
 _c_pp_char = C.POINTER(C.c_char_p)
+
+# 标准视察方向（指向观察者），配合 view_basis()/section()/outline() 使用
+UP = (0.0, 0.0, 1.0)       # 观察者在 +Z
+DOWN = (0.0, 0.0, -1.0)
+FRONT = (0.0, -1.0, 0.0)   # 观察者在 -Y 侧朝模型看
+BACK = (0.0, 1.0, 0.0)
+LEFT = (-1.0, 0.0, 0.0)
+RIGHT = (1.0, 0.0, 0.0)
 
 
 def _format_open_scad_value(value):
@@ -215,7 +224,7 @@ class Shape:
     def eval(self, **variables):
         merged = dict(self.variables)
         merged.update(variables)
-        return eval_text(self.source, **merged)
+        return eval_text(self._source_for_eval(), **merged)
 
     @property
     def is_empty(self):
@@ -243,7 +252,13 @@ class Shape:
         return offset(self, r=r, delta=delta, chamfer=chamfer, fn=fn, fa=fa, fs=fs)
 
     def projection(self, cut=False):
-        return Shape(f"projection(cut = {_format_open_scad_value(cut)}) {_as_source(self)}")
+        return projection(self, cut=cut)
+
+    def section(self, normal=UP, through=(0, 0, 0), up=UP):
+        return section(self, normal=normal, through=through, up=up)
+
+    def outline(self, normal=UP, up=UP):
+        return outline(self, normal=normal, up=up)
 
     def color(self, name, alpha=None):
         if alpha is None:
@@ -707,6 +722,78 @@ def projection(obj, cut=False):
     if obj is None:
         raise ValueError("projection() requires an object")
     return Shape(f"projection(cut = {_format_open_scad_value(cut)}) {_as_source(obj)}")
+
+
+# --- 视图与截面（任意视线方向） ---
+#
+# 实现方式：OpenSCAD 的 projection(cut = true) 是「在 z = 0 处沿 -z 切一刀」，
+# 所以任意平面的截面 = 用刚体变换把该平面搬到 z = 0，再 projection(cut = true)。
+# 变换用 multmatrix 给出（不用 rotate(a, v) 的轴角形式，避免法线趋近 ±z 时轴退化）。
+
+
+def _normalize(vector):
+    length = math.sqrt(sum(c * c for c in vector))
+    if length == 0:
+        raise ValueError("视线方向不能是零向量")
+    return [c / length for c in vector]
+
+
+def _cross(a, b):
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+
+def _dot(a, b):
+    return sum(a[i] * b[i] for i in range(3))
+
+
+def view_basis(normal=UP, up=UP):
+    """给定视线方向与期望的视图上方向，返回视图三轴 (x, y, z)。
+
+    z 是归一化后的视线方向（指向观察者），x 是视图向右、y 是视图向上，三者右手正交。
+    normal 与 up 平行时自动换参考方向：法线趋近 ±Z 时取 +Y 作上方向（俯视图的常规约定），
+    趋近 ±Y 时取 +X。
+
+    制图/标注需要知道「模型坐标 → 视图坐标」的对应关系时，用这个函数取基就行：
+    视图坐标 (u, v) 对应的模型点是 ``u * x + v * y``（再加上平面上的偏移）。
+    """
+    z = _normalize(normal)
+    reference = list(up)
+    if abs(_dot(z, reference)) > 0.999:
+        reference = [0.0, 1.0, 0.0] if abs(z[1]) < 0.9 else [1.0, 0.0, 0.0]
+    x = _normalize(_cross(reference, z))
+    y = _cross(z, x)
+    return x, y, z
+
+
+def _view_matrix(normal=UP, up=UP):
+    """把模型坐标变到视图坐标的 4x4 刚体矩阵（行 = 视图基向量）。"""
+    x, y, z = view_basis(normal, up)
+    return [[x[0], x[1], x[2], 0.0],
+            [y[0], y[1], y[2], 0.0],
+            [z[0], z[1], z[2], 0.0],
+            [0.0, 0.0, 0.0, 1.0]]
+
+
+def section(obj, normal=UP, through=(0, 0, 0), up=UP):
+    """点法平面与实体求交，返回 2D 截面形状。
+
+    ``normal`` 是平面法线（同时当作视线方向，指向观察者），``through`` 是平面上一点。
+    等价于一刀实切：平面没穿过实体时得到空几何。带中心孔等内部结构会被如实切出来。
+    """
+    if obj is None:
+        raise ValueError("section() requires an object")
+    plane_distance = _dot(_normalize(normal), through)
+    return projection(
+        translate([0, 0, -plane_distance], multmatrix(_view_matrix(normal, up), obj)),
+        cut=True,
+    )
+
+
+def outline(obj, normal=UP, up=UP):
+    """沿视线方向的轮廓投影（不切），返回 2D 形状。"""
+    if obj is None:
+        raise ValueError("outline() requires an object")
+    return projection(multmatrix(_view_matrix(normal, up), obj), cut=False)
 
 
 def color(obj, name, alpha=None):

@@ -10,6 +10,7 @@
 | 动画帧 | ✅ 已提供：`moz_eval_animation` / `moz_eval_animation_file` / `moz.eval_animation`，逐帧把 `$t = frame / fps` 传给模型并回调（等价上游 `--animate`） |
 | 库搜索路径的运行时接口 | ✅ 已提供：`moz_add_library_path` / `moz_get_library_paths`，不再只能靠 `OPENSCADPATH` 环境变量 |
 | 细粒度导出选项 | ⚠️ **基本没有可暴露的**：2021.01 里 STL 只有 ascii/二进制之分（由 format 决定）、3MF 无元数据/单位参数、AMF 的 `unit="millimeter"` 与 producer 元数据是硬编码。仅透出 `ExportInfo` 真正可配的 `sourceFileName`/`sourceFilePath`（`moz_export_ex` / `Geometry.export(..., source_file_name=...)`，只有 PDF 会用到） |
+| 截面 / 2D 工程图 | ⚠️ **已提供一层，但不是完整制图**：`moz.section` / `moz.outline`（任意视线方向的切平面与轮廓投影）+ `py/moz_drawing.py`（视图摆放、剖面线、中心线、线性/直径/半径标注、图框标题栏、`fits()` 版式自查，导出 SVG/DXF/PDF）。**没有**自动布图与投影对齐、隐藏线/虚线、剖切位置符号、GD&T/公差/粗糙度、多页图纸集——清单见 [drawing.md](drawing.md) |
 | 没有 CSG 树/颜色以外的中间产物接口 | 例如「每个 CSG product 的几何 + 颜色 + 变换」这种数据结构只用于内部的逐面颜色判定 |
 | 单实例串行 | 所有入口共享一个全局**递归**互斥量（引擎有静态全局状态），并发请求只是排队；递归是为了让动画回调里能再调 `measure`/`export`/`render`。**并行化做不了**：解析器、builtins、字体缓存、`RenderSettings`（含全局配色）都是进程级静态状态，改成分线程安全等于重写上游内核，故此项不做（服务化只能靠多进程） |
 | 没有服务化封装 | Web/服务化是项目路线目标，目前只有库 + 绑定 + 预览器；尚无 HTTP/任务队列/沙箱 |

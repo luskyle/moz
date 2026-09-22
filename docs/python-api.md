@@ -45,6 +45,9 @@ import moz_openscad as moz
 | `moz.multmatrix(matrix, obj)` | 4×4 矩阵变换 |
 | `moz.color(obj, name, alpha=None)` | 颜色名或 `[r, g, b]`（0~1）；`alpha` 可给透明度 |
 | `moz.projection(obj, cut=False)` | 投影（`cut=True` 取 Z=0 剖面） |
+| `moz.section(obj, normal=UP, through=(0,0,0), up=UP)` | 任意点法平面的**截面**（2D；等价于「平面 ∩ 实体」，内部结构如实切出） |
+| `moz.outline(obj, normal=UP, up=UP)` | 沿任意视线方向的**轮廓投影**（2D，不切） |
+| `moz.view_basis(normal, up=UP)` | 视图三轴 `(x, y, z)`；方向常量 `UP/DOWN/FRONT/BACK/LEFT/RIGHT` |
 | `moz.linear_extrude(obj, height, center=False, scale=None, twist=None, slices=None, convexity=None, fn=None, fa=None, fs=None)` | 2D → 3D |
 | `moz.rotate_extrude(obj, angle=360, convexity=None, fn=None, fa=None, fs=None)` | 绕 Z 轴旋转成型 |
 | `moz.offset(obj, r=None, delta=None, chamfer=None, fn=None, fa=None, fs=None)` | `r` 是**圆角**外扩/内缩，`delta` 是**尖角**外扩/内缩 |
@@ -206,6 +209,24 @@ moz.show_parts({"底板": base, "立柱": post})   # 多部件：右侧列表可
 
 `show_animation` 打开窗口时一次性预计算全部帧（各帧共用同一套居中/缩放，模型才是「动」而不是抖动），
 播放用定时器换缓冲。细节见 [viewer.md](viewer.md)。
+
+## 9b. 2D 工程图
+
+`moz.section()` / `moz.outline()` 出来的 2D 形状可以直接交给制图层排版并导出图纸：
+
+```python
+import moz_drawing as dw
+
+drawing = dw.Drawing(size="A3", landscape=True, title="支座", number="MZ-001")
+front = drawing.add_view("front", moz.outline(part, moz.FRONT), at=(85, 175), scale=1.5)
+drawing.add_view("A-A", moz.section(part, moz.UP), at=(265, 110), scale=1.5, hatched=True)
+drawing.dim(front, "linear", (-30, -10), (30, -10), offset=-12)   # 坐标按**视图坐标**给
+drawing.fits()                       # 版式自查：内容是否都在图框内
+drawing.export("pdf", "bracket.pdf")  # 也可 svg / dxf
+```
+
+视图摆放/比例、剖面线、中心线、线性/直径/半径标注、图框标题栏、已知限制见 [drawing.md](drawing.md)；
+可运行示例 `PYTHONPATH=py python3 py/drawing_demo.py`。
 
 ## 10. 库路径解析
 

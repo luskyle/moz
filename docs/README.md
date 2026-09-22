@@ -10,6 +10,7 @@
 | 先跑起来看效果 | [快速开始](#快速开始) |
 | 重建 `libmozopenscad.so` | [build.md](build.md) |
 | 用 Python 建模 | [python-api.md](python-api.md) |
+| 出截面 / 2D 工程图（视图、剖视、尺寸标注、导出 SVG/DXF/PDF） | [drawing.md](drawing.md) |
 | 直接调 C ABI | [c-api.md](c-api.md) |
 | 搞懂三层是怎么搭起来的 | [architecture.md](architecture.md) |
 | 确认「Python 版和原生 .scad 是不是同一个东西」 | [verification.md](verification.md) |
@@ -42,14 +43,17 @@ PYTHONPATH=py python3 py/examples/Basics/CSG.py          # 会打开预览器窗
 # 4) 校验示例与原生 .scad 是否同一个几何
 PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
 
-# 5) 跑单元测试（pytest；不需要显示器的用例也可跑）
+# 5) 出截面 + 排一张 2D 工程图（导出 SVG/DXF/PDF 到 build/out/drawing/）
+PYTHONPATH=py python3 py/drawing_demo.py
+
+# 6) 跑单元测试（pytest；不需要显示器的用例也可跑）
 python3 -m pytest                     # 在仓库根目录执行
 python3 -m pytest -v                  # 看每个用例名
 python3 -m pytest py/tests/test_measure.py::test_cube_measure   # 单个用例
 ```
 
 `py/verify_examples.py` 的判定标准见 [verification.md](verification.md)（当前 48 个示例全部通过）。
-单元测试在 `py/tests/`，覆盖测量、导出、取值、动画、库路径、网格颜色、`Shape` 缓存与 viewer 逻辑。
+单元测试在 `py/tests/`，覆盖测量、导出、取值、动画、库路径、网格颜色、`Shape` 缓存、截面/投影与制图图元。
 
 测试的前置：
 
