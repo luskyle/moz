@@ -50,10 +50,11 @@
 一句话：**把 OpenSCAD 2021.01 内核改造成一个可以被程序和脚本调用的几何内核，并提供一个与之语义严格对齐的 Python 建模 API。**
 
 ```
-py/                      Python 层：建模 API（moz_openscad）+ 预览器（moz_viewer）+ 示例与验证脚本
+py/                      Python 层：建模 API（moz_openscad）+ 2D 制图（moz_drawing）+ 预览器（moz_viewer）+ 示例与验证脚本
 3rd/openscad/src/moz/    C ABI（本项目唯一新增的 C++），编译成 libmozopenscad.so
-3rd/openscad/            vendored 的 OpenSCAD 2021.01 源码（含 libraries/MCAD/fonts.scad）
-scripts/                 构建脚本
+3rd/openscad/            vendored 的 OpenSCAD 2021.01 源码（含自研的 libraries/MCAD/fonts.scad 字形表）
+assets/fonts/            自带中文字库子集（OFL 1.1，脚本生成）
+scripts/                 构建脚本、字库/字形表生成脚本
 build/                   构建目录与产物（未入库）
 docs/                    文档
 ```
@@ -146,6 +147,7 @@ PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py     # 或把任
 
 ## 许可
 
-本仓库自有代码为 Apache-2.0（见 [LICENSE](LICENSE)）；vendored 的 OpenSCAD 内核为 GPLv2（含 CGAL 例外），
-`libraries/MCAD/fonts.scad` 为 LGPL 2.1。链接出的 `libmozopenscad.so` 因此属于 GPL 派生物——
+本仓库自有代码为 Apache-2.0（见 [LICENSE](LICENSE)）；vendored 的 OpenSCAD 内核为 GPLv2（含 CGAL 例外）；
+仓库里的两个字体资产——自研的 `libraries/MCAD/fonts.scad` 字形表与 `assets/fonts/MozSansSC-Regular.ttf`
+中文字库子集——均为 SIL OFL 1.1（可商用、可再分发）。链接出的 `libmozopenscad.so` 属于 GPL 派生物——
 对外分发/服务化前请先确认许可义务，详见 [docs/third-party.md](docs/third-party.md)。

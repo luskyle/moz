@@ -10,6 +10,10 @@
 坐标约定：图面坐标就是 SCAD 的 XY 平面，单位 mm，+Y 向上（导出 SVG 时 y 轴翻转由引擎处理）。
 线宽用极扁的矩形近似（2D 几何只有填充多边形，没有描边概念），默认 0.25 mm ≈ ISO 细线。
 
+文字默认用随仓库分发的 ``Moz Sans SC``（``TEXT_FONT``，见 docs/drawing.md）：引擎自带的
+默认字体只有拉丁字形，中文会静默变成空心方框；换字体传 ``font="<fontconfig 家族名>"``，
+``font=""`` 退回引擎默认字体。
+
 用法见 ``py/drawing_demo.py`` 与 docs/drawing.md。
 """
 
@@ -33,6 +37,11 @@ TEXT_SIZE = 3.5            # 正文文字（ISO 3.5 mm）
 DIM_TEXT_SIZE = 3.0        # 尺寸文字
 HATCH_SPACING = 3.0        # 剖面线间距
 HATCH_ANGLE = 45.0         # 剖面线角度
+
+# 文字用的字体（fontconfig 家族名）。默认用随仓库分发的 Moz Sans SC：引擎自带的默认字体
+# 只有拉丁字形，中文会**静默**变成空心方框，而系统有没有中文字体不可控。想换成系统里
+# 覆盖更全的字体，传 font="Noto Sans CJK SC" 之类即可；传 font="" 退回引擎默认字体。
+TEXT_FONT = "Moz Sans SC"
 
 
 # --- 基础图元 ---
@@ -68,9 +77,15 @@ def arrow(tip, direction, length=3.0, width=1.0):
     return shape
 
 
-def text_at(anchor, content, size=TEXT_SIZE, halign="left", valign="bottom", rotation=0.0):
-    """在指定锚点放一段文字（默认左下角对齐）。"""
-    shape = moz.text(content, size=size, halign=halign, valign=valign)
+def text_at(anchor, content, size=TEXT_SIZE, halign="left", valign="bottom", rotation=0.0, font=None):
+    """在指定锚点放一段文字（默认左下角对齐）。
+
+    ``font`` 是 fontconfig 的家族名：默认 ``None`` = 用模块常量 ``TEXT_FONT``（自带中文
+    字库），``""`` = 退回引擎默认字体（只有拉丁字形，中文会变成空心方框）。
+    """
+    if font is None:
+        font = TEXT_FONT
+    shape = moz.text(content, size=size, halign=halign, valign=valign, font=font or None)
     if rotation:
         shape = moz.rotate([0, 0, rotation], shape)
     return shape.translate(anchor)
@@ -165,7 +180,7 @@ class View:
 
 
 def dim_linear(p1, p2, offset=10.0, *, text=None, size=DIM_TEXT_SIZE, extension=2.0,
-               gap=1.0, arrow_size=3.0, width=LINE_WIDTH):
+               gap=1.0, arrow_size=3.0, width=LINE_WIDTH, font=None):
     """线性尺寸：p1→p2 是量取的两个点（图面坐标），offset 是尺寸线到它们的垂直距离。
 
     offset 为正时尺寸线落在 p1→p2 方向的**左侧**（即逆时针 90° 一侧）。
@@ -200,12 +215,12 @@ def dim_linear(p1, p2, offset=10.0, *, text=None, size=DIM_TEXT_SIZE, extension=
     elif angle <= -90:
         angle += 180
     anchor = (mid[0] + nx * (1.0 + size / 2), mid[1] + ny * (1.0 + size / 2))
-    pieces.append(text_at(anchor, label, size=size, halign="center", valign="center", rotation=angle))
+    pieces.append(text_at(anchor, label, size=size, halign="center", valign="center", rotation=angle, font=font))
     return moz.union(*pieces)
 
 
 def dim_diameter(center, radius, angle=45.0, *, text=None, size=DIM_TEXT_SIZE,
-                 leader=6.0, arrow_size=3.0, width=LINE_WIDTH):
+                 leader=6.0, arrow_size=3.0, width=LINE_WIDTH, font=None):
     """直径标注：从圆外引一条引线到圆周，文字形如 ⌀20。"""
     radians = math.radians(angle)
     ux, uy = math.cos(radians), math.sin(radians)
@@ -215,12 +230,12 @@ def dim_diameter(center, radius, angle=45.0, *, text=None, size=DIM_TEXT_SIZE,
     return moz.union(
         line(outer, edge, width),
         arrow(edge, (ux, uy), arrow_size, arrow_size / 3),
-        text_at((outer[0] + ux * 1.0, outer[1] + uy * 1.0), label, size=size, halign="left"),
+        text_at((outer[0] + ux * 1.0, outer[1] + uy * 1.0), label, size=size, halign="left", font=font),
     )
 
 
 def dim_radius(center, radius, angle=45.0, *, text=None, size=DIM_TEXT_SIZE,
-               leader=6.0, arrow_size=3.0, width=LINE_WIDTH):
+               leader=6.0, arrow_size=3.0, width=LINE_WIDTH, font=None):
     """半径标注：文字形如 R5。箭头尖端落在圆弧上，箭身朝圆心一侧。"""
     radians = math.radians(angle)
     ux, uy = math.cos(radians), math.sin(radians)
@@ -230,7 +245,7 @@ def dim_radius(center, radius, angle=45.0, *, text=None, size=DIM_TEXT_SIZE,
     return moz.union(
         line(center, outer, width),
         arrow(edge, (ux, uy), arrow_size, arrow_size / 3),
-        text_at((outer[0] + ux * 1.0, outer[1] + uy * 1.0), label, size=size, halign="left"),
+        text_at((outer[0] + ux * 1.0, outer[1] + uy * 1.0), label, size=size, halign="left", font=font),
     )
 
 
@@ -241,7 +256,7 @@ class Drawing:
     """一张图：图纸、图框、标题栏、若干视图与标注。"""
 
     def __init__(self, size="A4", landscape=False, margin=10.0, title="", number="",
-                 author="", date="", material="", scale_note="", border_width=THICK_WIDTH):
+                 author="", date="", material="", scale_note="", border_width=THICK_WIDTH, font=None):
         if isinstance(size, str):
             width, height = PAGE_SIZES[size]
         else:
@@ -249,6 +264,8 @@ class Drawing:
         self.page = (width, height) if not landscape else (height, width)
         self.margin = margin
         self.border_width = border_width
+        # 整张图的文字字体：图名/图号等栏位名是中文，所以默认就用自带中文字库
+        self.font = TEXT_FONT if font is None else font
         self.fields = {
             "图名": title, "图号": number, "材料": material,
             "设计": author, "日期": date, "比例": scale_note,
@@ -272,7 +289,7 @@ class Drawing:
         self.views.append(view)
         if label:
             anchor = label_at if label_at is not None else (at[0], at[1] - 4.0)
-            self.annotations.append(text_at(anchor, label, size=TEXT_SIZE, halign="left"))
+            self.annotations.append(text_at(anchor, label, size=TEXT_SIZE, halign="left", font=self.font))
         return view
 
     def add(self, *shapes):
@@ -280,16 +297,19 @@ class Drawing:
         self.annotations.extend(shapes)
         return self
 
-    def add_note(self, position, content, size=TEXT_SIZE):
-        """加一条说明文字。"""
-        self.annotations.append(text_at(position, content, size=size, halign="left"))
+    def add_note(self, position, content, size=TEXT_SIZE, font=None):
+        """加一条说明文字（字体默认跟随图面 ``self.font``）。"""
+        self.annotations.append(
+            text_at(position, content, size=size, halign="left", font=self.font if font is None else font)
+        )
         return self
 
     def dim(self, view, kind, *args, **kwargs):
         """在视图上标注：坐标用**视图坐标**给，内部换算到图面坐标。
 
-        kind 取 "linear" / "diameter" / "radius"。
+        kind 取 "linear" / "diameter" / "radius"；文字字体默认跟随图面 ``self.font``。
         """
+        kwargs.setdefault("font", self.font)
         if kind == "linear":
             p1, p2 = args[0], args[1]
             shape = dim_linear(view.to_sheet(p1), view.to_sheet(p2), **kwargs)
@@ -327,7 +347,7 @@ class Drawing:
             y = block_y + row_height * (len(rows) - index - 1)
             if index:
                 pieces.append(line((block_x, y), (block_x + width, y)))       # 行分隔线
-            labels.append(text_at((block_x + 2, y + 1.5), f"{key}：{value}", size=TEXT_SIZE))
+            labels.append(text_at((block_x + 2, y + 1.5), f"{key}：{value}", size=TEXT_SIZE, font=self.font))
         # 左侧竖线把字段名与内容分开
         pieces.append(line((block_x + 18, block_y), (block_x + 18, block_y + height)))
         return moz.union(*pieces, *labels)

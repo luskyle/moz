@@ -9,7 +9,7 @@
 | `Functions/` | 5 | 无（`echo` 只打印、不产生几何） |
 | `Advanced/` | 8 | `surface_image.png`（高度图） |
 | `Parametric/` | 2 | `sign.json`、`candleStand.json`（参数集） |
-| `Old/` | 24 | `example007/008/009/013/015.dxf`、`example010.dat`、`example012/016.stl`，以及 `MCAD/fonts.scad`（仅 023） |
+| `Old/` | 24 | `example007/008/009/013/015.dxf`、`example010.dat`、`example012/016.stl`，以及 `MCAD/fonts.scad`（仅 023，仓库自带的 drop-in） |
 
 另有 `moz/` 分类（**不是**上游示例的翻译，上游没有对应 `.scad`，因此**不在**
 `py/verify_examples.py` 的比对范围内）：放 moz 在 OpenSCAD 之上新增能力的示例。

@@ -22,6 +22,8 @@ moz-viewer = "moz_viewer:main"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+# 重新生成字库/字形表（scripts/make_cjk_subset_font.py、scripts/gen_mcad_polyfont.py）用
+tools = ["fonttools>=4.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["py/tests"]

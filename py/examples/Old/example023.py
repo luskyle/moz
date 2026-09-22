@@ -1,8 +1,9 @@
-"""OpenSCAD examples/Old/example023.scad 的 Python 版本：用 MCAD 的字形表排钟面。
+"""OpenSCAD examples/Old/example023.scad 的 Python 版本：用字形表排钟面。
 
 原文件的 ``use <MCAD/fonts.scad>`` 引入 OpenSCAD 的独立库 MCAD（不在 OpenSCAD 源码包
-里，需要单独取；本仓库已把它放在 3rd/openscad/libraries/MCAD/fonts.scad，
-来源 https://raw.githubusercontent.com/openscad/MCAD/master/fonts.scad，LGPL 2.1）。
+里，需要单独取）。本仓库在 3rd/openscad/libraries/MCAD/fonts.scad 放了一份**自研的
+drop-in 实现**（只提供 ``8bit_polyfont()``，由 scripts/gen_mcad_polyfont.py 从随引擎
+分发的 OFL 字体生成，见 docs/third-party.md），所以原文件能直接跑；上游那份是 LGPL 2.1。
 
 Python 版不做数据拷贝：字形表由引擎自己求值 ``use <...> 8bit_polyfont()`` 拿到
 （全精度），再按原文件的排版公式摆放 12 个小时单词。原文件用 SCAD 的

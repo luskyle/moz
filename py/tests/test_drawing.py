@@ -4,6 +4,8 @@
 剖面线只出现在实体内部、以及三种 2D 导出格式真的产出对应格式的文件。
 """
 
+from pathlib import Path
+
 import moz_drawing as dw
 import pytest
 
@@ -243,3 +245,53 @@ def test_unsupported_dimension_kind(moz):
     view = drawing.add_view("v", moz.square(10, center=True), at=(50, 50))
     with pytest.raises(ValueError):
         drawing.dim(view, "angle", (0, 0), 5)
+
+
+# --- 字体 ---
+#
+# 引擎的默认字体（内置 Liberation Sans）只有拉丁字形，中文会**静默**变成空心方框，
+# 所以制图层默认指到随仓库分发的 Moz Sans SC。缺字形时每字恰好画 8 个面（方框）。
+
+BUNDLED_FONT_DIR = Path(dw.__file__).resolve().parents[1] / "assets" / "fonts"
+needs_bundled_font = pytest.mark.skipif(
+    not BUNDLED_FONT_DIR.is_dir(), reason="自带字库 assets/fonts 不存在（见 scripts/make_cjk_subset_font.py）"
+)
+
+
+def test_text_at_defaults_to_bundled_cjk_font(moz):
+    assert dw.TEXT_FONT == "Moz Sans SC"
+    assert 'font = "Moz Sans SC"' in dw.text_at((0, 0), "A").source
+
+
+def test_text_at_font_can_be_overridden(moz):
+    assert 'font = "Liberation Sans"' in dw.text_at((0, 0), "A", font="Liberation Sans").source
+    assert "font" not in dw.text_at((0, 0), "A", font="").source    # "" = 引擎默认字体
+
+
+@needs_bundled_font
+def test_default_font_renders_chinese_not_boxes(moz):
+    real = dw.text_at((0, 0), "技术要求").measure
+    boxes = dw.text_at((0, 0), "技术要求", font="").measure
+    assert boxes.facets == 8 * len("技术要求")     # 引擎默认字体：4 个空心方框
+    assert real.facets > boxes.facets             # 自带字库：真字形
+    assert real.bbox_max[0] > boxes.bbox_max[0]
+
+
+def test_drawing_font_reaches_notes_labels_dims_and_title_block(moz):
+    drawing = dw.Drawing(size="A4", landscape=True, title="图名", font="Liberation Sans")
+    view = drawing.add_view("v", moz.square(10, center=True), at=(50, 50), label="主视图")
+    drawing.dim(view, "linear", (-5, -5), (5, -5), offset=-5)
+    drawing.add_note((10, 10), "技术要求")
+    source = drawing.build().source
+    # 标题栏栏位名 + 视图名 + 尺寸文字 + 说明文字都用图面字体
+    assert source.count('font = "Liberation Sans"') >= 4
+    assert "Moz Sans SC" not in source
+    assert 'font = "Moz Sans SC"' in dw.Drawing(size="A4", title="图名").title_block().source
+
+
+def test_add_note_font_overrides_drawing_font(moz):
+    drawing = dw.Drawing(size="A4", font="Liberation Sans", title="图名")
+    drawing.add_note((10, 10), "技术要求", font="Moz Sans SC")
+    source = drawing.build().source
+    assert 'font = "Moz Sans SC"' in source
+    assert 'font = "Liberation Sans"' in source        # 标题栏仍是图面字体

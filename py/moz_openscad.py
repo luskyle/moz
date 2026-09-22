@@ -55,6 +55,16 @@ _RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "
 if os.path.isdir(os.path.join(_RESOURCE_DIR, "color-schemes")):
     os.environ.setdefault("MOZ_OPENSCAD_RESOURCE_DIR", os.path.abspath(_RESOURCE_DIR))
 
+# 自带的中文字库（assets/fonts，见 docs/python-api.md）：引擎按「家族名」向 fontconfig
+# 要字体，机器上没装中文字体时 text() 不报错、而是静默画出空心方框。把随仓库分发的
+# 字库目录追加进 OPENSCAD_FONT_PATH（不改调用方已有的值），任何机器上都能出中文。
+_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "fonts")
+if os.path.isdir(_FONT_DIR):
+    _font_dir_abs = os.path.abspath(_FONT_DIR)
+    if _font_dir_abs not in (os.environ.get("OPENSCAD_FONT_PATH") or "").split(os.pathsep):
+        _existing = os.environ.get("OPENSCAD_FONT_PATH")
+        os.environ["OPENSCAD_FONT_PATH"] = f"{_existing}{os.pathsep}{_font_dir_abs}" if _existing else _font_dir_abs
+
 __all__ = [
     "eval_text", "eval_file", "dump", "dump_file", "value", "number", "vector",
     "eval_animation", "add_library_path", "library_paths", "show_animation", "show_parts",

@@ -33,7 +33,8 @@
 | `py/examples/` | 48 个示例（按上游 `examples.json` 的分类组织） |
 | `py/demo.py` | 参数化支架演示（导出 STL/3MF + 预览 + CSG dump） |
 | `3rd/openscad/src/moz/moz_api.{h,cc}` | C ABI 实现 |
-| `3rd/openscad/` | vendored OpenSCAD 源码（含 `libraries/MCAD/fonts.scad`） |
+| `3rd/openscad/` | vendored OpenSCAD 源码（含自研的 `libraries/MCAD/fonts.scad` 字形表） |
+| `assets/fonts/` | 自带中文字库子集（SIL OFL 1.1，`scripts/make_cjk_subset_font.py` 生成） |
 | `scripts/build_moz_openscad.sh` | 唯一的构建配方 |
 | `build/` | 构建目录与产物（**未入库**：`build/lib`、`build/out`） |
 

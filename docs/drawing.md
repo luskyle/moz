@@ -83,6 +83,10 @@ drawing.show()                   # 用预览器的 2D 视图看（可缩放/平�
   所以**标注坐标按视图坐标给**（和你在模型里量到的尺寸一致，不用自己乘比例）。
 - `content_bbox()` / `fits(tolerance=)`：版式自查（内容出框时 `fits()` 为 False）。
   线宽会让贴边几何略微越界，惯例留一个线宽容差（`fits(tolerance=dw.THICK_WIDTH)`）。
+- 文字字体：`Drawing(font=)` 定整张图，`add_note(..., font=)`、`add_view(..., label=)`、
+  `dim(...)` 的文字都跟随它（也能单独覆盖）。默认 `TEXT_FONT = "Moz Sans SC"`——随仓库分发的
+  中文字库子集；**不要**把字体退回引擎默认（`font=""`），它只有拉丁字形，中文会静默变成空心方框。
+  传 `font="<fontconfig 家族名>"`（如 `"Noto Sans CJK SC"`）可换成系统字体。
 
 ### 标注图元
 
@@ -94,7 +98,7 @@ drawing.show()                   # 用预览器的 2D 视图看（可缩放/平�
 | `dim_diameter(center, radius, angle=45)` / `dim_radius(...)`    | ⌀ / R 标注，带引线与箭头（箭头在圆内一侧）                                                                               |
 | `centerline(p1, p2, extension=2)`                                 | 点划线中心线，长划 4 / 间隙 1.5，**两端以长划收尾**，两端各伸出 `extension`                                       |
 | `hatch(shape, spacing=3, angle=45)`                               | 剖面线：平行细线与截面求交（空形状原样返回）                                                                              |
-| `text_at(anchor, content, size=3.5, halign=, valign=, rotation=)` | 定位文字                                                                                                                  |
+| `text_at(anchor, content, size=3.5, halign=, valign=, rotation=, font=)` | 定位文字；`font` 默认用自带中文字库 `TEXT_FONT`（`font=""` 退回引擎默认字体，只有拉丁字形） |
 
 `Drawing.title_block()` 在图框右下角画标题栏（字段见表头 `fields`），`Drawing.border()` 画图框。
 
@@ -110,7 +114,9 @@ drawing.show()                   # 用预览器的 2D 视图看（可缩放/平�
 - **没有 GD&T / 公差 / 粗糙度**：只有线性、直径、半径三种尺寸与文字说明；没有形位公差框、配合代号、表面粗糙度符号、基准符号。
 - **单页**：一次导出就是一张图；多页/图纸集要自己在外面组织。
 - **线是填充矩形**：SVG/DXF 里线段是极扁的多边形（0.25 mm ≈ ISO 细线），不是矢量描边；对下游 CAM/DXF 处理一般够用，但如果你需要真正的线实体，得在导出后处理。
-- **文字用引擎的字体**：`text_at` 走 `moz.text()`，字体由 fontconfig 决定；没有专门的工程字库。
+- **文字用引擎的字体**：`text_at` 走 `moz.text()`，字体由 fontconfig 家族名决定，默认是自带的
+  `Moz Sans SC`（GB2312 6763 字 + ASCII/拉丁/常用符号）；生僻字不在子集里会缺字形，需要时传
+  `font="Noto Sans CJK SC"` 之类换系统字体。没有专门的工程字库（长仿宋等是商业字体）。
 - 逐面颜色/材质这类 3D 属性与这一层无关（图面是纯 2D 几何）。
 
 ## 四、测试

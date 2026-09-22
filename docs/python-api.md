@@ -228,6 +228,10 @@ drawing.export("pdf", "bracket.pdf")  # 也可 svg / dxf
 视图摆放/比例、剖面线、中心线、线性/直径/半径标注、图框标题栏、已知限制见 [drawing.md](drawing.md)；
 可运行示例 `PYTHONPATH=py python3 py/drawing_demo.py`。
 
+图纸上的文字默认用随仓库分发的 `Moz Sans SC`（`moz_drawing.TEXT_FONT`）；换字体传
+`font="<fontconfig 家族名>"`（`Drawing(font=)` / `add_note(..., font=)` / `dim(..., font=)`），
+传 `font=""` 退回引擎默认字体（只有拉丁字形，中文会静默变成空心方框）。
+
 ## 10. 库路径解析
 
 `MOZ_OPENSCAD_LIB` → 模块同目录 → `../build/lib/libmozopenscad.so`。

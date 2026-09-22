@@ -75,8 +75,20 @@ def build_drawing(scale=1.5):
     return drawing
 
 
+def check_font():
+    """确认字体真的出中文：缺字形时引擎不报错，只画空心方框（每字 8 个面）。"""
+    facets = dw.text_at((0, 0), "中").measure.facets
+    ok = facets > 8
+    print(f"字体: {dw.TEXT_FONT}（中文可渲染: {ok}）")
+    if not ok:
+        print("  ⚠ 这个字体没有中文字形，图上会出现空心方框：装个中文字体，"
+              "或把 dw.TEXT_FONT 指到已装的家族名")
+    return ok
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    check_font()
     drawing = build_drawing()
     sheet = drawing.build()
     print(f"图面: {sheet.dimension}D, {sheet.measure.facets} 个面, 面积 {sheet.measure.area:.0f} mm²")

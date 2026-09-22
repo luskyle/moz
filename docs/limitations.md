@@ -27,8 +27,8 @@
 
 - `tests/` 与 `tests/MCAD` 依赖缺失（上游 submodule 不在源码包里），因此 `BUILD_TESTING` 默认关闭，
   上游自带测试没有接入。
-- 上游示例里凡是依赖 MCAD 库的（当前只有 `Old/example023`）都需要 `libraries/MCAD/fonts.scad`，
-  见 [third-party.md](third-party.md)。
+- 上游示例里依赖 MCAD 库的只有 `Old/example023`；本项目在 `libraries/MCAD/fonts.scad` 放了一份
+  自研的 drop-in（只实现 `8bit_polyfont()`，SIL OFL 1.1），见 [third-party.md](third-party.md)。
 - 对 CGAL 版本有要求：源码树里的补丁是按 **CGAL ≥ 5.4** 写的，用更旧的 CGAL 需要改回上游写法
   （见 [build.md](build.md)）。
 - 渲染依赖离屏 OpenGL（`OffscreenView`）；`NULLGL=ON` 的构建会让 PNG 渲染变成空实现，仅够做几何验证。

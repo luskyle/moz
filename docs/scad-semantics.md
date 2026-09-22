@@ -144,5 +144,6 @@ Python 侧预览器也据此判断（否则会去建一个空网格）。
 ## 16. MCAD 之类的子模块不在 OpenSCAD 源码包里
 
 `3rd/openscad/libraries/MCAD/` 在源码包里是**空目录**（上游用 submodule 管理），
-`tests/` 目录也依赖它。所以 `Old/example023.scad` 在补齐 `fonts.scad` 之前根本跑不出几何。
-见 [third-party.md](third-party.md)。
+`tests/` 目录也依赖它。本项目在 `libraries/MCAD/fonts.scad` 放了一份自研的 drop-in
+（只实现 `8bit_polyfont()`，见 [third-party.md](third-party.md)），因此 `Old/example023.scad`
+能直接跑出几何；上游那份 MCAD 文件里的 `polytext()` / `braille_*` 等模块没有实现。

@@ -63,6 +63,7 @@ CGAL/OpenCSG/Qt 等系统库，按平台打包 wheel 需要 manylinux 镜像与�
 | --- | --- |
 | 几何库 | 先 `bash scripts/build_moz_openscad.sh`；不在仓库布局时用 `MOZ_OPENSCAD_LIB` 指到那个 `.so` |
 | 资源目录（配色等） | 仓库里会自动定位 `3rd/openscad`；装到别处后需 `MOZ_OPENSCAD_RESOURCE_DIR` |
+| 自带中文字库 | 仓库里自动把 `assets/fonts` 追加进 `OPENSCAD_FONT_PATH`；不在仓库布局时自己设该变量 |
 | `use <MCAD/...>` | 设 `OPENSCADPATH`（或把 `libraries` 目录加进库搜索路径，见 `moz.add_library_path`） |
 
 库路径解析顺序见 `moz_openscad.py` 的 `_find_lib()`：`MOZ_OPENSCAD_LIB` → 模块同目录 → `../build/lib/`。
@@ -91,7 +92,7 @@ ruff check .               # lint（配置见 pyproject.toml）
 
 - `render_png(..., colorscheme="Tomorrow")` 之类会退回默认配色（引擎会记一条
   `Unknown color scheme '...'` 警告）；
-- `use <MCAD/fonts.scad>` 会找不到库（除非设了 `OPENSCADPATH`）。
+- `use <MCAD/fonts.scad>` 会找不到库（除非设了 `OPENSCADPATH` 指到 `3rd/openscad/libraries`）。
 
 ## 常见问题
 
@@ -99,8 +100,9 @@ ruff check .               # lint（配置见 pyproject.toml）
 | --- | --- |
 | `libmozopenscad.so not found` | 还没构建，或路径不对；用 `MOZ_OPENSCAD_LIB` 指定 |
 | `text()` 报找不到字体 | 缺 `libfontconfig1-dev` / 系统字体；或 `font=` 写了不存在的字体名 |
+| `text("中文")` 变成空心方框（**不报错**） | 该字体没有中文字形（引擎默认字体只有拉丁字形）：用 `font="Moz Sans SC"`（自带字库）或系统里的中文字体家族名 |
 | `colorscheme=` 不生效 | 资源目录没定位到（见上） |
 | 渲染出的 PNG 没颜色 | 用了 `renderer="cgal"`；该路径与上游 `--render=cgal` 一样是无颜色的，默认的 preview 路径才有颜色 |
-| `use <MCAD/...>` 找不到 | 需要 `3rd/openscad/libraries/MCAD/fonts.scad`（见 [third-party.md](third-party.md)），或设 `OPENSCADPATH` |
+| `use <MCAD/...>` 找不到 | 仓库自带 drop-in 的 `3rd/openscad/libraries/MCAD/fonts.scad`（只实现 `8bit_polyfont()`，见 [third-party.md](third-party.md)）；要用完整 MCAD 库就把上游文件放好并设 `OPENSCADPATH` |
 | 同样的模型每次导出的字节不同 | 应该不会：CGAL 求值与导出是确定性的；若出现，先跑 `py/verify_examples.py` 对照原生行为 |
 | 构建时 `generic_print_polyhedron` 相关报错 | 说明 CGAL 版本低于 5.4，需要把 `cgalutils-polyhedron.cc` 的适配改回上游写法 |
