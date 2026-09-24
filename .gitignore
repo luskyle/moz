@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 # 打包时从 build/lib 拷进来的共享库（二进制不入库，见 scripts/build_wheel.sh）
 py/moz_data/lib/
+# setuptools 生成的元数据：构建/打包时自动重建，跟踪它只会让每次打包都脏一片 diff
+*.egg-info/

@@ -1,2 +1,0 @@
-moz_openscad
-moz_viewer

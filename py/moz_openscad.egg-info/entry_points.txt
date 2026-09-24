@@ -1,3 +1,0 @@
-[console_scripts]
-moz-demo = demo:main
-moz-viewer = moz_viewer:main

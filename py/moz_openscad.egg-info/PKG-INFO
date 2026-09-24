@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: moz-openscad
-Version: 0.1.0
-Summary: Python API and interactive viewer for the headless OpenSCAD core
-Requires-Python: >=3.10
-License-File: LICENSE
-Requires-Dist: numpy>=1.24
-Requires-Dist: PySide6>=6.5
-Dynamic: license-file
