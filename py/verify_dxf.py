@@ -48,23 +48,61 @@ CORPORA = [
 # 图纸本身没闭合 / 重叠到成不了环：预期报开口并拒绝挤出（当前语料里没有这类；默认策略
 # open_chains="close" 会像引擎一样隐式闭合，严格模式见 py/moz_dxf.py 的 open_chains="report"）
 EXPECTED_OPEN = set()
-# 病态文件：预期解析失败（小数点写成逗号）
-EXPECTED_BAD = {"nothing-decimal-comma-separated.dxf"}
+# 病态文件：预期连 ezdxf 的修复模式都读不出来（LWPOLYLINE 缺子类标记）
+# 注意：`nothing-decimal-comma-separated.dxf`（小数点写成逗号）**已经不在这一档**——
+# 加了 ezdxf 修复模式回退之后它也能读了（挤出 4 mm³），现在按正常文件判定。
+EXPECTED_BAD = {"test__data__blocks.dxf"}
 
-# 能参与成环的实体类型：文件里连这些都没有，那"没有轮廓"就是事实而不是我们的 bug
+# 能参与成环的实体类型
 LOOP_ENTITIES = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE", "HATCH"}
+# 自己就能成环的（圆/椭圆/闭合多段线）：文件里有这些，我们就**必须**产出轮廓
+SELF_CLOSED = {"CIRCLE", "ELLIPSE"}
 
 
-def has_loop_entities(path):
-    """用 ezdxf 独立看一眼文件里有没有"能成环"的实体（用于区分"本来没几何"和"我们漏了"）。"""
+def _entity_endpoints(entity):
+    """实体的两个端点（用于独立判断"这些线能不能接成环"）。"""
+    kind = entity.dxftype()
+    if kind == "LINE":
+        return [(entity.dxf.start.x, entity.dxf.start.y), (entity.dxf.end.x, entity.dxf.end.y)]
+    if kind == "ARC":
+        return [(entity.start_point.x, entity.start_point.y), (entity.end_point.x, entity.end_point.y)]
+    if kind in ("LWPOLYLINE", "POLYLINE"):
+        points = [(p[0], p[1]) for p in entity.get_points("xy")]
+        return [points[0], points[-1]] if len(points) >= 2 else []
+    if kind == "SPLINE":
+        points = [(float(p[0]), float(p[1])) for p in getattr(entity, "control_points", [])]
+        return [points[0], points[-1]] if len(points) >= 2 else []
+    return []
+
+
+def loop_evidence(path):
+    """独立（不经我们的解析器）判断文件里"有没有能成环的可能"，返回：
+
+    ``("none", n)``   没有能成环的实体（纯标注/文字/元数据）；
+    ``("closed", n)`` 有自己就能成环的实体（圆/椭圆/闭合多段线）——我们必须产出轮廓；
+    ``("shared", n)`` 端点被两条以上段共享——有可能接成环；
+    ``("loose", n)``  有直线/圆弧但彼此不共享端点（例如"每层一条独立线"）——成不了环。
+    """
     import ezdxf
 
     document = ezdxf.readfile(path)
-    return any(entity.dxftype() in LOOP_ENTITIES for entity in document.modelspace())
+    kinds, endpoints = [], []
+    for entity in document.modelspace():
+        kind = entity.dxftype()
+        if kind not in LOOP_ENTITIES:
+            continue
+        kinds.append(kind)
+        if kind in SELF_CLOSED or (kind in ("LWPOLYLINE", "POLYLINE") and entity.closed):
+            return "closed", len(kinds)
+        endpoints.extend(_entity_endpoints(entity))
+    rounded = [(round(x, 6), round(y, 6)) for x, y in endpoints]
+    if len(rounded) != len(set(rounded)):
+        return "shared", len(kinds)
+    return ("loose" if kinds else "none"), len(kinds)
 
 
 def check(path):
-    """检查一个文件，返回 (判定, 说明)。判定取值 OK / OPEN / BAD / FAIL。"""
+    """检查一个文件，返回 (判定, 说明)。判定取值 OK / EMPTY / OPEN / BAD / FAIL。"""
     name = os.path.basename(path)
     try:
         drawing = moz_dxf.read_dxf(path)
@@ -79,17 +117,20 @@ def check(path):
         return "FAIL", "报告为空"
 
     if not drawing.contours and not drawing.open_contours:
-        # 完全没有轮廓：先独立看一眼文件里有没有"能成环"的实体——没有就是"没材料可建模"
-        # （纯标注/纯文字/纯元数据文件，例如 dxf-viewer 的 dimension-* 与 LibreCAD 的编码测试集），
-        # 有却说没有轮廓才是我们的 bug
+        # 完全没有轮廓：独立复核"文件里到底能不能成环"——
+        # 有自闭合实体、或有共享端点却没产出轮廓，才是我们的 bug；其余是"没有材料可建模"
         try:
-            loops = has_loop_entities(path)
+            evidence, count = loop_evidence(path)
         except Exception as exc:
             return "FAIL", f"复核失败：{type(exc).__name__}: {str(exc)[:40]}"
-        detail = (f"无成环实体（标注 {len(drawing.dimensions)}，忽略 {sum(drawing.unsupported.values())}）"
+        rejected = sum(drawing.unsupported.values())
+        if evidence == "closed" or (evidence == "shared" and rejected < count):
+            return "FAIL", (f"文件里有能成环的几何（{evidence}，{count} 个实体，我们明确拒绝 {rejected} 个）"
+                            f"却没产出轮廓（实体 {dict(drawing.entity_counts)}）")
+        shape = {"none": "没有能成环的实体", "shared": "几何成不了环", "loose": "线段彼此不连通"}[evidence]
+        detail = (f"{shape}（{count} 个实体，明确拒绝 {rejected} 个；标注 {len(drawing.dimensions)}）"
                   f"→ 没有材料可建模")
-        return ("EMPTY" if not loops else "FAIL"), detail if not loops else (
-            f"文件里有能成环的实体（{dict(drawing.entity_counts)}）却没产出轮廓")
+        return "EMPTY", detail
 
     if drawing.open_contours:
         try:

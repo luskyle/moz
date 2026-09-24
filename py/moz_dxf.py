@@ -38,9 +38,11 @@ import moz_openscad as moz
 try:                      # 只有解析 DXF 才需要它，所以做成可选依赖
     import ezdxf
     from ezdxf import path as _ezpath
+    from ezdxf.recover import readfile as recover_readfile
 except ImportError:       # pragma: no cover - 环境缺依赖时走这里
     ezdxf = None
     _ezpath = None
+    recover_readfile = None
 
 __all__ = [
     "Contour", "Dimension", "Drawing", "read_dxf", "extrude", "parameters", "report",
@@ -319,8 +321,11 @@ def _entities_to_segments(drawing, entities, keep_roles, arc_chord_tolerance):
         try:
             flattened = _ezpath.make_path(entity).flattening(distance=arc_chord_tolerance)
             vertices = [(point.x, point.y) for point in flattened]
-        except Exception:                      # 引擎不认识的实体 / 退化几何
+        except Exception as exc:              # 引擎不认识的实体 / 退化几何（例如不合法的 SPLINE）
             drawing.unsupported[kind] += 1
+            drawing.warnings.append(
+                f"有 {kind} 无法求值（{type(exc).__name__}: {str(exc)[:60]}），已忽略其几何"
+            )
             continue
         if len(vertices) < 2:
             drawing.unsupported[kind] += 1
@@ -552,8 +557,19 @@ def read_dxf(path, *, layers=None, exclude_layers=None, hole_layers=None, role_p
 
     try:
         document = ezdxf.readfile(path)
-    except Exception as exc:                       # 格式坏（例如小数点是逗号）也要给能读懂的错
-        raise moz.OpenSCADError(f"解析 DXF 失败：{path}（{type(exc).__name__}: {exc}）") from exc
+    except Exception as exc:
+        # 真实图纸经常"不合规但可用"（缺子类标记、AC1003 老版本、库图块裸文件…）：
+        # ezdxf 有个专门的修复读取器，先试它；仍然不行才算解析失败
+        try:
+            document, _auditor = recover_readfile(path)
+        except Exception as recovery:
+            raise moz.OpenSCADError(
+                f"解析 DXF 失败：{path}（{type(exc).__name__}: {exc}；修复模式也不行："
+                f"{type(recovery).__name__}: {recovery}）"
+            ) from exc
+        recovered = f"{type(exc).__name__}: {exc}"
+    else:
+        recovered = None
     patterns = dict(DEFAULT_LAYER_ROLES)
     if role_patterns:
         patterns.update(role_patterns)
@@ -562,6 +578,8 @@ def read_dxf(path, *, layers=None, exclude_layers=None, hole_layers=None, role_p
         patterns["outline"] = "^(" + "|".join(re.escape(name) for name in layers) + ")$"
 
     drawing = Drawing(path=path, version=document.dxfversion or "")
+    if recovered:
+        drawing.warnings.append(f"图纸不合规（{recovered}），已用 ezdxf 修复模式读取；结果可能有偏差")
     drawing.roles = {layer.dxf.name: _layer_role(layer.dxf.name, patterns) for layer in document.layers}
     drawing.roles.setdefault("0", "other")
     for name in exclude_layers or ():

@@ -291,6 +291,46 @@ def test_unknown_entity_is_skipped_not_fatal(moz, tmp_path):
     assert drawing.profile_area() == pytest.approx(100.0, rel=1e-9)   # 其余几何照常成环
 
 
+def test_broken_file_falls_back_to_recover(moz, tmp_path):
+    """结构不合规的图纸（这里：一条 LINE 只有 x 没有 y）要用 ezdxf 修复模式读进来，而不是直接失败。
+
+    真实语料里这类文件不少：LibreCAD 的库图块（ENDSEC 没有 SECTION）、ezdxf 的 AC1003 老图
+    （坐标缺一半）——`readfile` 拒绝，但 `ezdxf.recover` 能读。
+    """
+    lines = ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", "4", "0", "ENDSEC",
+             "0", "SECTION", "2", "ENTITIES"]
+    for start, end in [((0, 0), (10, 0)), ((10, 0), (10, 10)), ((10, 10), (0, 10)), ((0, 10), (0, 0))]:
+        lines += ["0", "LINE", "8", "0", "10", str(float(start[0])), "20", str(float(start[1])),
+                  "11", str(float(end[0])), "21", str(float(end[1]))]
+    lines += ["0", "LINE", "8", "0", "10", "99.0"]        # 缺 y 坐标 → readfile 会拒
+    lines += ["0", "ENDSEC", "0", "EOF", ""]
+    path = tmp_path / "broken.dxf"
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    import ezdxf
+    from ezdxf.lldxf.const import DXFStructureError
+
+    with pytest.raises(DXFStructureError):
+        ezdxf.readfile(str(path))                          # 正常模式确实读不了
+
+    drawing = moz_dxf.read_dxf(str(path))                  # 修复模式读进来
+    assert any("修复模式" in warning for warning in drawing.warnings)
+    assert drawing.profile_area() == pytest.approx(100.0, rel=1e-9)
+
+
+def test_unreadable_file_raises_with_both_reasons(moz, tmp_path):
+    """连修复模式都读不了的文件：抛 OpenSCADError，消息里同时给出两种模式的原因。"""
+    lines = ["0", "SECTION", "2", "ENTITIES", "0", "LWPOLYLINE", "8", "0", "90", "3"
+             , "10", "0.0", "20", "0.0", "10", "10.0", "20", "0.0", "10", "10.0", "20", "10.0",
+             "0", "ENDSEC", "0", "EOF", ""]
+    path = tmp_path / "hopeless.dxf"
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    with pytest.raises(moz.OpenSCADError) as info:
+        moz_dxf.read_dxf(str(path))
+    assert "修复模式也不行" in str(info.value)
+
+
 # --- 便捷入口与报告 ---
 
 
