@@ -11,6 +11,7 @@
 | 重建 `libmozopenscad.so` | [build.md](build.md) |
 | 用 Python 建模 | [python-api.md](python-api.md) |
 | 出截面 / 2D 工程图（视图、剖视、尺寸标注、导出 SVG/DXF/PDF） | [drawing.md](drawing.md) |
+| 反过来：把图纸变成模型（2D → 3D 的链路、选型与阶段） | [2d-to-3d.md](2d-to-3d.md) |
 | 直接调 C ABI | [c-api.md](c-api.md) |
 | 搞懂三层是怎么搭起来的 | [architecture.md](architecture.md) |
 | 确认「Python 版和原生 .scad 是不是同一个东西」 | [verification.md](verification.md) |
