@@ -30,7 +30,7 @@
 python3 scripts/fetch_dxf_corpus.py              # 抓公开来源（已存在的不覆盖；默认 4 路并发）
 python3 scripts/fetch_dxf_corpus.py --dry-run    # 只看会抓什么
 python3 scripts/fetch_dxf_corpus.py --workers 8  # 本机网络单连接慢，可以调并发
-PYTHONPATH=py python3 py/verify_dxf.py           # 跑一遍回归（当前 181 个文件）
+PYTHONPATH=py python3 py/verify_dxf.py           # 跑一遍回归（当前 206 个文件）
 ```
 
 `local/`、`kicad/` 这两组来自本机，脚本不会自动抓；换机器时从原项目/上游原样拷过来即可

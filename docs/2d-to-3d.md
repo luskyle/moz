@@ -94,7 +94,7 @@
 | --- | --- |
 | 三个样例 | 外轮廓面积相对误差 **0**（plate/messy 全是直线段）、bracket 1.35e-4（圆弧离散）；体积与"截面×高"逐位一致 |
 | 与引擎 `dxf_dim` 对拍 | 三个样例的命名标注全部一致 |
-| 现成语料回归 `py/verify_dxf.py` | 共 **181 个 DXF**（上游 testdata 33 + 公开语料 145 + 样例 3）：**OK=139、EMPTY=41（本来就没材料）、预期坏图 1、FAIL=0** |
+| 现成语料回归 `py/verify_dxf.py` | 共 **206 个 DXF**（上游 testdata 33 + 公开语料 170 + 样例 3）：**OK=164、EMPTY=41（本来就没材料）、预期坏图 1、FAIL=0** |
 | 公开语料 | 从 7 个公开仓库抓来（`corpus/dxf/`，见该目录 README）：LibreCAD 的解析器测试集与零件库（运动/电站/电气/管路）、dxf-viewer 的块与标注专项、**ezdxf 自己的示例与集成测试图**、dxf-parser 的测试图、QCAD 的图层/剖面线/标注样式/文字专项、FreeCAD 零件库、KiCad 的 PCB 板框与 Fusion360 样条；抓取脚本 `scripts/fetch_dxf_corpus.py`（并发下载） |
 | 语料找出来的真问题（已修 + 已加测试） | ① **自引用块**（LibreCAD `block-recursive.dxf`）以前直接 `RecursionError` → 现在展开到 32 层停手并告警；② **未知实体**（`WEIRDENT`）以前 `Invalid DXF attribute "layer"` 把整张图带崩 → 现在逐实体兜住、跳过并计数；③ **结构不合规但可用的图**（LibreCAD 库图块"ENDSEC 没有 SECTION"、ezdxf 的 AC1003 老图"坐标缺一半"）以前直接解析失败 → 现在回退到 `ezdxf.recover` 读进来并告警；④ **不合法的 SPLINE**（节点数少一个/3 个控制点配 4 阶）会被明确记进"忽略"并给出原因，而不是静默丢几何 |
 | **与引擎 `import()` 对拍**（同一张图两条路） | 全直线段图纸 **逐位一致**（example007/008/013）；example007 一开始差 −8.9%，查出来是"引擎会隐式闭合画断的链"→ 对齐后 **0.000%**；带圆弧的差 0.1~0.2%（两边圆弧分段口径不同，见下） |
