@@ -36,9 +36,11 @@ def build_parser():
     parser.add_argument("--hole-layer", action="append", default=None, help="强制当作孔的图层（可重复）")
     parser.add_argument("--arc-chord-tolerance", type=float, default=0.01,
                         help="圆弧离散的弦高容差（mm，默认 0.01）")
-    parser.add_argument("--bridge-tolerance", type=float, default=0.05,
-                        help="缺口桥接容差（mm，默认 0.05）")
-    parser.add_argument("--unit-scale", type=float, default=None, help="覆盖图纸单位换算（例如 25.4）")
+    parser.add_argument("--open-chains", choices=("close", "report"), default="close",
+                        help="画断的链：close=隐式闭合（默认，与引擎一致）/ report=不进材料只报告")
+    parser.add_argument("--unit-policy", choices=("header", "as-drawn"), default="header",
+                        help="header=按 $INSUNITS 换算（默认）/ as-drawn=忽略它，按原始数值")
+    parser.add_argument("--unit-scale", type=float, default=None, help="直接指定换算系数（例如 25.4）")
     parser.add_argument("--density", type=float, default=7.85,
                         help="材料密度 g/cm³（默认 7.85 = 钢），用于估算重量")
     parser.add_argument("--parameters-json", default=None, help="把命名标注写成 JSON")
@@ -77,7 +79,8 @@ def main(argv=None):
         exclude_layers=args.exclude_layer,
         hole_layers=args.hole_layer,
         arc_chord_tolerance=args.arc_chord_tolerance,
-        bridge_tolerance=args.bridge_tolerance,
+        open_chains=args.open_chains,
+        unit_policy=args.unit_policy,
         unit_scale=args.unit_scale,
     )
     print(drawing.report())

@@ -355,13 +355,18 @@ moz_dxf.report("板框.dxf")                              # 只要报告
 - **图层语义**：匹配到中心线/虚线/标注/构造线角色的图层不参与几何；**没匹配上的图层（含 `0` 层）
   按轮廓处理**——真实图纸大多不给图层起有语义的名字。`layers=` 只收指定图层，`hole_layers=` 强制当孔，
   `exclude_layers=` 直接排除。
-- **修复只报告不静默**：重复段去重、缺口桥接（`bridge_tolerance`）、共线点合并、自交诊断、分叉告警
+- **与引擎 `import()` 语义对齐**（实测出来的规则）：画断的链默认**隐式闭合**（`open_chains="close"`，
+  严格模式 `"report"`）；成环顺序照引擎（先开口链、再闭合链、每步取编号最小的段）；填充用**奇偶规则**
+  （重叠区域会被挖掉、嵌套层级自动处理）。全直线段图纸与原生 `import()` 的体积**逐位一致**。
+- **修复只报告不静默**：重复段去重、零长丢弃、隐式闭合（含缺口大小）、共线点合并、交叉节点、自交诊断
   都记在 `drawing.repairs` / `drawing.warnings` 里。端点吸附（`snap_tolerance`）只用于拓扑判断，
   **不动输出坐标**。
-- **内孔靠奇偶规则**：轮廓点表整份交给 `polygon(points, paths)`，嵌套层级由引擎的奇偶填充处理，
-  所以"外轮廓 + 孔 + 岛"这类嵌套也正确（与 SCAD 语义一致）。
+- **单位**：默认按 `$INSUNITS` 换算到 mm，但**非 1 倍换算一定告警**（这个头字段常是模板默认值——
+  ezdxf 新建文件默认就是 6=米，照它换算会放大 1000 倍）；`unit_policy="as-drawn"` 按原始数值
+  （与引擎一致），`unit_scale=` 直接指定。
 - **标注 ↔ 引擎一致**：名字取 DIMENSION 的 group 1（文字覆盖），与 `dxf_dim(file, name)` 认的是同一列；
   圆孔按弦高离散（`arc_chord_tolerance`，默认 0.01 mm）。
+- 已知边界：互相交叉/重叠的线不做平面细分（引擎也不做），成环顺序不同时面积可能差 ~10%。
 - 命令行演示：`PYTHONPATH=py python3 py/dxf_demo.py 图纸.dxf --height 6 --export-stl out.stl --drawing out.pdf`
   （`--drawing` 会把模型再画回一张 A4 图，即"图纸 ⇄ 模型"闭环）。
 - 语料回归：`PYTHONPATH=py python3 py/verify_dxf.py [额外的.dxf ...]`。

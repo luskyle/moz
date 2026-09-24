@@ -103,6 +103,7 @@ python3 -m pytest          # 单元测试（py/tests/，需 pytest；无 .so 时
 ruff check .               # lint（配置见 pyproject.toml）
 PYTHONPATH=py python3 py/verify_examples.py    # 48 示例保真度
 PYTHONPATH=py python3 py/verify_dxf.py         # DXF 语料回归（需 ezdxf；可加自己的图纸）
+python3 scripts/fetch_dxf_corpus.py            # 重新抓公开 DXF 语料（corpus/dxf/）
 ```
 
 可选依赖：`pip install -e ".[test]"`（pytest + ezdxf）、`pip install -e ".[dxf]"`（只装 ezdxf，

@@ -141,7 +141,7 @@ def test_bracket_volume_and_height_parameter(moz):
 def test_messy_reports_repairs(moz):
     drawing = moz_dxf.read_dxf(fixture("messy"))
     assert drawing.repairs.get("duplicate", 0) >= 3      # 底边/左边的重复段（含反向）
-    assert drawing.repairs.get("bridge", 0) == 1         # 顶边 0.02 mm 缺口
+    assert drawing.repairs.get("implicit_close", 0) == 1  # 顶边 0.02 mm 缺口（与引擎一致地隐式闭合）
     assert len(drawing.outlines) == 1 and len(drawing.holes) == 1
     assert not drawing.open_contours
 
@@ -165,8 +165,8 @@ def test_messy_self_intersection_is_diagnosed(moz):
     assert "自交" in drawing.report()
 
 
-def test_open_contour_is_reported_not_silently_dropped(moz, tmp_path):
-    """一条画不完的折线：要报"开口链"，而不是悄悄变成闭合轮廓。"""
+def test_open_contour_strict_mode_reports_and_refuses(moz, tmp_path):
+    """严格模式（open_chains="report"）：开口链不进材料、报出来，挤出时明确报错。"""
     import ezdxf
 
     doc = ezdxf.new("R2000", setup=False)
@@ -177,11 +177,118 @@ def test_open_contour_is_reported_not_silently_dropped(moz, tmp_path):
     path = tmp_path / "open.dxf"
     doc.saveas(path)
 
-    drawing = moz_dxf.read_dxf(str(path))
+    drawing = moz_dxf.read_dxf(str(path), open_chains="report")
     assert drawing.repairs.get("open_chain", 0) == 1
     assert len(drawing.open_contours) == 1
     with pytest.raises(moz.OpenSCADError):
         drawing.extrude(height=1.0)                # 没有闭合轮廓 → 明确报错
+
+
+def test_open_chain_is_closed_like_the_engine(moz, tmp_path):
+    """默认（open_chains="close"）与引擎 import() 一致：画断的链被隐式闭合。
+
+    引擎实测：三条边（缺顶边）的方框，原生 import() 面积仍是 100（= 10×10）。
+    """
+    import ezdxf
+
+    doc = ezdxf.new("R2000", setup=False)
+    doc.header["$INSUNITS"] = 4                    # 毫米（ezdxf 默认是 6=米，会触发 ×1000 告警）
+    msp = doc.modelspace()
+    doc.layers.add("OUTLINE", color=7)
+    for start, end in [((0, 0), (10, 0)), ((10, 0), (10, 10)), ((10, 10), (0, 10))]:
+        msp.add_line(start, end, dxfattribs={"layer": "OUTLINE"})
+    path = tmp_path / "open3.dxf"
+    doc.saveas(path)
+
+    drawing = moz_dxf.read_dxf(str(path))
+    assert drawing.repairs.get("implicit_close", 0) == 1
+    assert drawing.profile_area() == pytest.approx(100.0, rel=1e-9)
+    native = moz.eval_text(f'import(file = "{path}");').measure.area
+    assert native == pytest.approx(100.0, rel=1e-9)
+
+
+def test_unit_policy_header_warns_and_as_drawn_does_not(moz, tmp_path):
+    """$INSUNITS 常是模板默认值（ezdxf 新建文件默认 6=米）：照它换算要告警，也可显式忽略。"""
+    import ezdxf
+
+    doc = ezdxf.new("R2000", setup=False)          # 默认 $INSUNITS=6（米）
+    assert doc.header.get("$INSUNITS") == 6
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (10, 0))
+    path = tmp_path / "meters.dxf"
+    doc.saveas(path)
+
+    by_header = moz_dxf.read_dxf(str(path))
+    assert by_header.unit_scale == 1000.0
+    assert any("模板默认值" in warning for warning in by_header.warnings)
+
+    as_drawn = moz_dxf.read_dxf(str(path), unit_policy="as-drawn")
+    assert as_drawn.unit_scale == 1.0
+    assert as_drawn.warnings == []
+
+
+def test_matches_native_import_on_line_drawings(moz):
+    """与引擎 import() 对拍：全是直线段的图纸必须**逐位一致**（圆弧离散不同，另见下一条）。"""
+    for name in ("example007", "example008", "example013"):
+        path = moz.data_path("examples", "Old", f"{name}.dxf")
+        height = 3.0
+        native = moz.eval_text(f'linear_extrude(height = {height}) import(file = "{path}");')
+        ours = moz_dxf.read_dxf(path).extrude(height=height)
+        assert ours.measure.volume == pytest.approx(native.measure.volume, rel=1e-9), name
+
+
+def test_arc_drawings_match_native_within_discretization(moz):
+    """带圆弧/圆的图纸：差异只应来自圆弧离散（引擎按它的 $fn 分段，我们按弦高容差）。
+
+    example009 还含**互相交叉/重叠**的线（我们报 crossing_node/duplicate）：两边都不做平面
+    细分，成环顺序不同会让面积差到 ~10%，这是 P1 已知的边界（见 docs/2d-to-3d.md）。
+    """
+    path = moz.data_path("examples", "Old", "example009.dxf")
+    height = 3.0
+    native = moz.eval_text(f'linear_extrude(height = {height}) import(file = "{path}");')
+    drawing = moz_dxf.read_dxf(path)
+    ours = drawing.extrude(height=height)
+    ratio = ours.measure.volume / native.measure.volume
+    assert 0.85 <= ratio <= 1.15
+    assert drawing.repairs.get("duplicate", 0) > 0 and drawing.repairs.get("crossing_node", 0) > 0
+
+
+# --- 公开语料里找出来的两个健壮性 bug（都要钉住） ---
+
+
+def test_recursive_block_does_not_blow_the_stack(moz, tmp_path):
+    """块引用自己引用自己（LibreCAD 的 block-recursive.dxf 就是这样）：必须展开到上限停手并告警。"""
+    import ezdxf
+
+    doc = ezdxf.new("R2000", setup=False)
+    doc.header["$INSUNITS"] = 4
+    block = doc.blocks.new("recursive")
+    block.add_line((0, 0), (10, 0))
+    block.add_blockref("recursive", (0, 0))          # 自己引用自己
+    doc.modelspace().add_blockref("recursive", (0, 0))
+    path = tmp_path / "recursive.dxf"
+    doc.saveas(path)
+
+    drawing = moz_dxf.read_dxf(str(path))            # 之前这里是 RecursionError
+    assert drawing.unsupported.get("INSERT（嵌套超限）", 0) >= 1
+    assert any("嵌套超过" in warning for warning in drawing.warnings)
+
+
+def test_unknown_entity_is_skipped_not_fatal(moz, tmp_path):
+    """未知实体不能把整张图带崩（LibreCAD 的 classes_raw_entity 测试文件里有个 WEIRDENT）。"""
+    lines = ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", "4", "0", "ENDSEC",
+             "0", "SECTION", "2", "ENTITIES", "0", "WEIRDENT", "8", "0", "1", "hello"]
+    for start, end in [((0, 0), (10, 0)), ((10, 0), (10, 10)),
+                       ((10, 10), (0, 10)), ((0, 10), (0, 0))]:
+        lines += ["0", "LINE", "8", "0", "10", str(float(start[0])), "20", str(float(start[1])),
+                  "11", str(float(end[0])), "21", str(float(end[1]))]
+    lines += ["0", "ENDSEC", "0", "EOF", ""]
+    path = tmp_path / "weird.dxf"
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    drawing = moz_dxf.read_dxf(str(path))
+    assert drawing.unsupported.get("未知实体", 0) == 1
+    assert drawing.profile_area() == pytest.approx(100.0, rel=1e-9)   # 其余几何照常成环
 
 
 # --- 便捷入口与报告 ---

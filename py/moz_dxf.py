@@ -92,10 +92,11 @@ DIM_KINDS = {0: "linear", 1: "aligned", 2: "angular", 3: "diameter", 4: "radius"
 REPAIR_LABELS = {
     "duplicate": "重复线段去重",
     "zero_length": "零长线段丢弃",
-    "bridge": "缺口桥接",
+    "implicit_close": "画断的链隐式闭合（与引擎一致）",
+    "open_chain": "开口链未参与材料（严格模式）",
+    "degenerate_chain": "点数不足的链丢弃",
     "collinear": "共线点合并",
-    "branch": "分叉（按最小转角继续）",
-    "open_chain": "开口链（未闭合）",
+    "crossing_node": "经过交叉节点（>2 条段相交处）",
     "self_intersection": "自交（仅诊断）",
 }
 
@@ -103,7 +104,8 @@ REPAIR_LABELS = {
 SELF_INTERSECTION_LIMIT = 4000
 
 _PARSE_OPTIONS = ("layers", "exclude_layers", "hole_layers", "role_patterns", "snap_tolerance",
-                  "bridge_tolerance", "arc_chord_tolerance", "collinear_tolerance", "unit_scale")
+                  "open_chains", "arc_chord_tolerance", "collinear_tolerance", "unit_scale",
+                  "unit_policy")
 
 
 def _require_ezdxf():
@@ -258,14 +260,22 @@ class Drawing:
 # --- 解析 ---
 
 
-def _iter_entities(container):
-    """展开 INSERT（块引用，含嵌套），产出实际实体。"""
+def _iter_entities(container, drawing, depth=0, max_depth=32):
+    """展开 INSERT（块引用，含嵌套），产出实际实体。
+
+    深度有上限：真实图纸里出现过**块引用自己引用自己**（LibreCAD 的 `block-recursive.dxf`），
+    不设限会直接 RecursionError。
+    """
     for entity in container:
-        if entity.dxftype() == "INSERT":
-            for sub in entity.virtual_entities():
-                yield from _iter_entities([sub])
-        else:
+        kind = entity.dxftype()
+        if kind != "INSERT":
             yield entity
+            continue
+        if depth >= max_depth:
+            drawing.unsupported["INSERT（嵌套超限）"] += 1
+            drawing.warnings.append(f"块引用嵌套超过 {max_depth} 层，已停止展开（可能是自引用块）")
+            continue
+        yield from _iter_entities(entity.virtual_entities(), drawing, depth + 1, max_depth)
 
 
 def _layer_role(layer, patterns):
@@ -283,13 +293,22 @@ def _entities_to_segments(drawing, entities, keep_roles, arc_chord_tolerance):
     """把实体转成线段（圆弧按弦高离散），同时统计图层/实体/忽略项。"""
     segments = []
     for entity in entities:
-        kind = entity.dxftype()
-        layer = entity.dxf.layer
+        # 未知/畸形实体可能连 dxftype()/layer 都取不到（LibreCAD 的 classes_raw_entity 测试文件
+        # 里就有个 WEIRDENT），所以每个实体单独兜住，别让一个怪实体毁掉整张图
+        try:
+            kind = entity.dxftype()
+            layer = entity.dxf.layer
+        except Exception:
+            drawing.unsupported["未知实体"] += 1
+            continue
         drawing.layer_counts[layer] += 1
         drawing.entity_counts[kind] += 1
 
         if kind == "DIMENSION":
-            drawing.dimensions.append(_read_dimension(entity))
+            try:
+                drawing.dimensions.append(_read_dimension(entity))
+            except Exception:
+                drawing.unsupported["DIMENSION（读取失败）"] += 1
             continue
         role = drawing.roles.get(layer) or "other"
         if role in NON_GEOMETRY_ROLES:
@@ -333,11 +352,17 @@ def _is_number(text):
 # --- 修复 ---
 
 
-def _chain(segments, snap_tolerance, bridge_tolerance, repairs, warnings):
-    """散段 → 闭合轮廓；去重、零长丢弃、缺口桥接、分叉都记进 repairs/warnings。
+def _chain(segments, snap_tolerance, open_chains, repairs, warnings):
+    """散段 → 链，**照引擎 ``dxfdata.cc`` 的做法对齐**（实测出来的语义）：
 
-    ``snap_tolerance`` 只用于**判断两个端点是不是同一个节点**（浮点噪声级别）；
-    输出的几何坐标一律用图纸原始值，绝不用吸附后的坐标——否则会把轮廓量化坏。
+    1. 先走开口链：从「有自由端（只连着一条段）」的端点起步；
+    2. 再走剩下的（闭合）链：随便起步，走不动就停；
+    3. 每一步取**编号最小**的可用段——引擎不做转角启发，我们也别自作聪明；
+    4. 所有链最后都当**闭合轮廓**参与奇偶填充（引擎会把画断的链隐式闭合，
+       实测：缺一条边的方框在原生 ``import()`` 里面积仍是 100），所以缺口要**报出来**。
+
+    ``snap_tolerance`` 只用于判断两个端点是不是同一个节点（浮点噪声级别）；输出坐标一律用
+    图纸原始值。``open_chains="report"`` 时，开口链不参与材料、只进报告（严格模式）。
     """
     unique = []                       # (a_key, b_key, a_point, b_point, layer)
     seen = set()
@@ -358,72 +383,76 @@ def _chain(segments, snap_tolerance, bridge_tolerance, repairs, warnings):
         on_node[a_key].append(index)
         on_node[b_key].append(index)
 
-    visited = [False] * len(unique)
-    chains = []
-    for start_index in range(len(unique)):
-        if visited[start_index]:
-            continue
-        visited[start_index] = True
-        start_key, end_key, start_point, end_point, layer = unique[start_index]
+    used = [False] * len(unique)
 
-        def walk(closure_key, from_key, from_point, previous_index):
-            """从 from_point 往回走，走到 closure_key 就是闭合。返回 (点列, 是否闭合)。"""
-            points = [from_point]
-            current_key, previous = from_key, previous_index
-            while True:
-                candidates = [i for i in on_node[current_key] if i != previous and not visited[i]]
-                if not candidates:
-                    return points, False
-                if len(candidates) > 1:
-                    repairs["branch"] += 1
-                    warnings.append(
-                        f"轮廓分叉：节点 {current_key} 有 {len(candidates)} 条分支，按最小转角继续"
-                    )
-                    candidates.sort(key=lambda i: _turn_penalty(unique, current_key, previous, i))
-                index = candidates[0]
-                visited[index] = True
-                seg_a_key, seg_b_key, seg_a, seg_b, _layer = unique[index]
-                if seg_a_key == current_key:
-                    nxt_key, nxt_point = seg_b_key, seg_b
-                else:
-                    nxt_key, nxt_point = seg_a_key, seg_a
-                points.append(nxt_point)
-                previous, current_key = index, nxt_key
-                if current_key == closure_key:
-                    return points, True
-
-        forward, closed = walk(start_key, end_key, end_point, start_index)      # 从 b 走到 a
-        backward, _ = walk(end_key, start_key, start_point, start_index)        # 从 a 走到 b
-        points = list(reversed(backward)) + forward
-
-        if not closed:
-            first, last = points[0], points[-1]
-            if math.hypot(first[0] - last[0], first[1] - last[1]) <= bridge_tolerance:
-                repairs["bridge"] += 1
-                closed = True
-            else:
-                repairs["open_chain"] += 1
-        if len(points) > 1 and points[0] == points[-1]:
-            points = points[:-1]
-        chains.append((points, closed, layer))
-    return chains
-
-
-def _turn_penalty(unique, node_key, previous_index, candidate_index):
-    """分叉处挑"最像直着走下去"的那条（转角越小越优先）。"""
-
-    def direction(index, key):
+    def far_end(index, key):
         a_key, b_key, a_point, b_point, _layer = unique[index]
         if a_key == key:
-            return (b_point[0] - a_point[0], b_point[1] - a_point[1])
-        return (a_point[0] - b_point[0], a_point[1] - b_point[1])
+            return b_key, b_point
+        return a_key, a_point
 
-    incoming = direction(previous_index, node_key) if previous_index is not None else (1.0, 0.0)
-    outgoing = direction(candidate_index, node_key)
-    norm_in = math.hypot(*incoming) or 1.0
-    norm_out = math.hypot(*outgoing) or 1.0
-    cos_angle = (incoming[0] * outgoing[0] + incoming[1] * outgoing[1]) / (norm_in * norm_out)
-    return -cos_angle            # cos 越大（转角越小）越优先
+    def walk(index, from_key, from_point):
+        """从 from_point 顺着走下去；返回点列。每选一段立刻标记已用（否则会来回打转）。"""
+        points = [from_point]
+        current_key, current_index = from_key, index
+        used[index] = True
+        while True:
+            current_key, current_point = far_end(current_index, current_key)
+            points.append(current_point)
+            if len(on_node[current_key]) > 2:
+                repairs["crossing_node"] += 1
+            candidates = [i for i in on_node[current_key] if not used[i]]
+            if not candidates:
+                return points
+            current_index = candidates[0]
+            if used[current_index]:                       # 护栏：理论上不会发生
+                warnings.append("成环时出现自引用，已中断该链")
+                return points
+            used[current_index] = True
+
+    def free_end_index():
+        """找一个「端点只连着一条段」的段（引擎的开口链起点）。"""
+        for node, indexes in on_node.items():
+            if len(indexes) == 1 and not used[indexes[0]]:
+                return indexes[0], node
+        return None, None
+
+    chains = []
+    # 第一遍：开口链（有自由端的）
+    while True:
+        index, node = free_end_index()
+        if index is None:
+            break
+        key, point = (unique[index][0], unique[index][2]) if unique[index][0] == node else \
+                     (unique[index][1], unique[index][3])
+        points = walk(index, key, point)
+        chains.append((points, unique[index][4]))
+    # 第二遍：剩下的（闭合）链
+    for index in range(len(unique)):
+        if used[index]:
+            continue
+        a_key, _b_key, a_point, _b_point, layer = unique[index]
+        chains.append((walk(index, a_key, a_point), layer))
+
+    # 统一成轮廓点列：闭合成环（引擎的语义），缺口记进报告
+    result = []
+    for points, layer in chains:
+        if len(points) < 3:
+            repairs["degenerate_chain"] += 1
+            continue
+        gap = math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1])
+        if gap > snap_tolerance and open_chains == "close":
+            repairs["implicit_close"] += 1
+            warnings.append(f"链首尾相距 {gap:.3f} mm，已隐式闭合（与引擎 import() 一致）")
+        if open_chains != "close" and gap > snap_tolerance:
+            repairs["open_chain"] += 1
+            warnings.append(f"开口链首尾相距 {gap:.3f} mm，未参与材料（open_chains='report'）")
+            result.append((points, False, layer))
+            continue
+        if len(points) > 1 and points[0] == points[-1]:
+            points = points[:-1]
+        result.append((points, True, layer))
+    return result
 
 
 def _drop_collinear(points, tolerance, repairs):
@@ -500,18 +529,22 @@ def _segments_cross(a1, a2, b1, b2):
 
 
 def read_dxf(path, *, layers=None, exclude_layers=None, hole_layers=None, role_patterns=None,
-             snap_tolerance=0.001, bridge_tolerance=0.05, arc_chord_tolerance=0.01,
-             collinear_tolerance=1e-6, unit_scale=None):
+             snap_tolerance=0.001, open_chains="close", arc_chord_tolerance=0.01,
+             collinear_tolerance=1e-6, unit_scale=None, unit_policy="header"):
     """读一张 DXF，返回 ``Drawing``（轮廓已修复、标注已提取）。
 
     - ``layers``：只处理这些图层（给名字列表）；否则按 ``role_patterns`` 判断角色，
-      只保留 outline/hole 两类参与几何；
-    - ``exclude_layers``：直接排除的图层（例如 DIM/SCRAP）；
+      中心线/虚线/标注/构造线不参与几何，其余（含没匹配上的和 ``0`` 层）都当轮廓；
+    - ``exclude_layers``：直接排除的图层；
     - ``hole_layers``：强制当作孔的图层（比奇偶规则优先）；
     - ``snap_tolerance``：端点是否同一节点的判定容差（mm，只影响拓扑判断，不动坐标）；
-    - ``bridge_tolerance``：缺口桥接容差（mm，真实图纸画断一点点很常见）；
+    - ``open_chains``：画断的链怎么办——``"close"``（默认，与引擎 ``import()`` 一致：隐式闭合
+      并在报告里给出缺口大小）或 ``"report"``（严格模式：不进材料，只在报告里列出）；
     - ``arc_chord_tolerance``：圆弧离散的弦高容差（mm），越小越圆、点越多；
-    - ``unit_scale``：覆盖图纸单位（图纸没写单位时默认按 mm）。
+    - ``unit_policy``：``"header"``（默认，按 ``$INSUNITS`` 换算到 mm，且**非 1 倍换算一定告警**——
+      这个头字段经常是模板默认值而不是真实意图）或 ``"as-drawn"``（忽略 ``$INSUNITS``、按图纸原始
+      数值，与引擎 ``import()`` 一致）；
+    - ``unit_scale``：直接指定换算系数（优先于上面两者）。
     """
     _require_ezdxf()
     if not os.path.exists(path):
@@ -541,20 +574,28 @@ def read_dxf(path, *, layers=None, exclude_layers=None, hole_layers=None, role_p
     if unit_scale is not None:
         drawing.unit_scale = float(unit_scale)
         drawing.units = f"手动指定（×{unit_scale:g}）"
+    elif unit_policy == "as-drawn":
+        drawing.unit_scale = 1.0
+        drawing.units = "按图纸原始数值（忽略 $INSUNITS，与引擎 import() 一致）"
     elif units in UNIT_SCALES and UNIT_SCALES[units] is not None:
         drawing.unit_scale = UNIT_SCALES[units]
         drawing.units = f"$INSUNITS={units}"
+        if drawing.unit_scale != 1.0:
+            drawing.warnings.append(
+                f"图纸声明 $INSUNITS={units}，已按 ×{drawing.unit_scale:g} 换算到 mm；"
+                f"这个头字段常是模板默认值（ezdxf 新建文件默认就是 6=米），若不符实请用 unit_policy=\"as-drawn\""
+            )
     else:
         drawing.unit_scale = 1.0
         drawing.units = "无单位信息" if units in (None, 0) else f"$INSUNITS={units}（未支持，按 mm）"
         drawing.warnings.append("图纸没有（或用了不支持的）单位信息，按 mm 处理；需要时用 unit_scale= 覆盖")
 
     keep_roles = None if layers is None else {"outline"}      # None = 收所有非「非几何」角色
-    entities = list(_iter_entities(document.modelspace()))
+    entities = list(_iter_entities(document.modelspace(), drawing))
     segments = _entities_to_segments(drawing, entities, keep_roles, arc_chord_tolerance)
 
     repairs = defaultdict(int)
-    chains = _chain(segments, snap_tolerance, bridge_tolerance, repairs, drawing.warnings)
+    chains = _chain(segments, snap_tolerance, open_chains, repairs, drawing.warnings)
 
     contours = []
     for points, closed, layer in chains:
