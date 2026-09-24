@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python dependencies
-        run: pip install numpy pytest PySide6 ruff
+        run: pip install numpy pytest PySide6 ruff ezdxf
 
       - name: Build the geometry core
         run: JOBS=$(nproc) bash scripts/build_moz_openscad.sh
@@ -37,6 +37,9 @@ jobs:
 
       - name: Example fidelity (48 upstream examples)
         run: PYTHONPATH=py python3 py/verify_examples.py
+
+      - name: Drawing import regression (upstream DXF corpus)
+        run: PYTHONPATH=py python3 py/verify_dxf.py
 
       - name: Package the wheel and smoke-test the installed copy
         run: |

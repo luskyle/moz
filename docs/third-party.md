@@ -51,6 +51,7 @@
 | `py/moz_data/libraries/MCAD/fonts.scad`（自研 drop-in） | SIL OFL 1.1 |
 | `py/moz_data/fonts/MozSansSC-Regular.ttf`（自带中文字库子集） | SIL OFL 1.1（Noto Sans CJK SC 子集，见同目录 `MozSansSC-LICENSE.txt`） |
 | `py/moz_data/fonts/Liberation-2.00.1/`、`color-schemes/`、`examples/`（从上游复制的副本） | 同上游：OFL 1.1 / GPLv2 例外 / CC 等（见各文件自身声明） |
+| `ezdxf`（可选依赖，图纸 → 模型用） | MIT |
 
 `build/lib/libmozopenscad.so`（构建产物；打包时拷进 `py/moz_data/lib/` 随 wheel 分发）
 是把三者的代码链成一个共享库（CGAL 例外允许链接 CGAL），因此**这个库属于 GPL 派生物**：

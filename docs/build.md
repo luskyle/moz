@@ -101,7 +101,12 @@ cd /tmp && /tmp/mozvenv/bin/python <repo>/scripts/smoke_installed.py   # 打包 
 ```bash
 python3 -m pytest          # 单元测试（py/tests/，需 pytest；无 .so 时整体 skip）
 ruff check .               # lint（配置见 pyproject.toml）
+PYTHONPATH=py python3 py/verify_examples.py    # 48 示例保真度
+PYTHONPATH=py python3 py/verify_dxf.py         # DXF 语料回归（需 ezdxf；可加自己的图纸）
 ```
+
+可选依赖：`pip install -e ".[test]"`（pytest + ezdxf）、`pip install -e ".[dxf]"`（只装 ezdxf，
+图纸 → 模型用）、`pip install -e ".[tools]"`（fonttools，重新生成字库/字形表用）。
 
 ## 运行时环境变量
 

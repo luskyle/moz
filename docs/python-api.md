@@ -328,3 +328,40 @@ g.export_bytes("svg", source_file_name="part.scad")
 `source_file_name` / `source_file_path` 覆盖 `ExportInfo` 里 PDF 用的源文档信息。
 **OpenSCAD 2021.01 没有更多导出开关**（3MF 无元数据/单位、AMF 单位与 producer 元数据硬编码、
 STL 无单位/精度参数），所以这是 C ABI 能透出的全部导出选项。
+
+## 16. 图纸 → 模型（`moz_dxf`，P1）
+
+反向的那条链路：把一张 DXF 单视图图纸读成可改参数/可测量的模型。链路与验收见 [2d-to-3d.md](2d-to-3d.md)。
+需要可选依赖：`pip install "moz-openscad[dxf]"`（或 `pip install ezdxf`，MIT）。
+
+```python
+import moz_dxf
+
+drawing = moz_dxf.read_dxf("板框.dxf")           # 解析 + 修复，返回 Drawing
+print(drawing.report())                           # 解析/修复报告（不静默修补，逐项列计数）
+drawing.outlines, drawing.holes, drawing.repairs  # 轮廓 / 孔 / 修复计数
+drawing.parameters()                              # {'bodywidth': 120.0, 'plateheight': 40.0}
+
+part = drawing.extrude(height=6.0)                # 外轮廓 - 孔（奇偶规则）
+part.measure.volume                               # 体积；也能 export("binstl", ...) / show()
+
+moz_dxf.extrude("板框.dxf", 6.0, layers=("OUTLINE",))   # 便捷入口（可用 layers= 只要某层）
+moz_dxf.parameters("板框.dxf")                          # 命名标注 → {名字: 值}
+moz_dxf.report("板框.dxf")                              # 只要报告
+```
+
+要点：
+
+- **图层语义**：匹配到中心线/虚线/标注/构造线角色的图层不参与几何；**没匹配上的图层（含 `0` 层）
+  按轮廓处理**——真实图纸大多不给图层起有语义的名字。`layers=` 只收指定图层，`hole_layers=` 强制当孔，
+  `exclude_layers=` 直接排除。
+- **修复只报告不静默**：重复段去重、缺口桥接（`bridge_tolerance`）、共线点合并、自交诊断、分叉告警
+  都记在 `drawing.repairs` / `drawing.warnings` 里。端点吸附（`snap_tolerance`）只用于拓扑判断，
+  **不动输出坐标**。
+- **内孔靠奇偶规则**：轮廓点表整份交给 `polygon(points, paths)`，嵌套层级由引擎的奇偶填充处理，
+  所以"外轮廓 + 孔 + 岛"这类嵌套也正确（与 SCAD 语义一致）。
+- **标注 ↔ 引擎一致**：名字取 DIMENSION 的 group 1（文字覆盖），与 `dxf_dim(file, name)` 认的是同一列；
+  圆孔按弦高离散（`arc_chord_tolerance`，默认 0.01 mm）。
+- 命令行演示：`PYTHONPATH=py python3 py/dxf_demo.py 图纸.dxf --height 6 --export-stl out.stl --drawing out.pdf`
+  （`--drawing` 会把模型再画回一张 A4 图，即"图纸 ⇄ 模型"闭环）。
+- 语料回归：`PYTHONPATH=py python3 py/verify_dxf.py [额外的.dxf ...]`。

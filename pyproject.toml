@@ -14,7 +14,7 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "py"}
-py-modules = ["moz_openscad", "moz_viewer", "moz_drawing", "demo"]
+py-modules = ["moz_openscad", "moz_viewer", "moz_drawing", "moz_dxf", "demo"]
 # moz_data 只放运行时数据（配色方案、字体、MCAD 库、示例数据、预编译 .so）
 packages = ["moz_data"]
 include-package-data = true
@@ -35,6 +35,7 @@ moz_data = [
     "examples/Advanced/*",
     "examples/Parametric/*",
     "examples/Old/*",
+    "drawings/*",
     "lib/*",
 ]
 
@@ -43,9 +44,11 @@ moz-demo = "demo:main"
 moz-viewer = "moz_viewer:main"
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "ezdxf>=1.0"]
 # 重新生成字库/字形表（scripts/make_cjk_subset_font.py、scripts/gen_mcad_polyfont.py）用
 tools = ["fonttools>=4.0"]
+# 图纸 → 模型（py/moz_dxf.py，P1）：纯 Python 的 DXF 解析库（MIT）
+dxf = ["ezdxf>=1.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["py/tests"]

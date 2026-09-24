@@ -74,6 +74,27 @@ def main():
     print("DXF 导入      :", imported.facets, "面, 体积", round(imported.volume, 1))
     assert imported.volume > 0
 
+    # 图纸 → 模型（P1）：ezdxf 是可选依赖——装了顺手验一遍，没装必须给可读提示而不是崩掉
+    import moz_dxf
+    drawing_path = moz.data_path("drawings", "plate.dxf")
+    assert os.path.exists(drawing_path), f"随包数据缺失: {drawing_path}"
+    try:
+        import ezdxf
+    except ImportError:
+        try:
+            moz_dxf.read_dxf(drawing_path)
+        except moz.OpenSCADError as exc:
+            assert "ezdxf" in str(exc), exc
+            print("图纸→模型     : 未装 ezdxf，给出可读提示（符合预期）")
+        else:
+            raise AssertionError("缺 ezdxf 却没有报错")
+    else:
+        parsed = moz_dxf.read_dxf(drawing_path)
+        volume = parsed.extrude(height=2.0).measure.volume
+        print("图纸→模型     :", f"{len(parsed.outlines)} 外 + {len(parsed.holes)} 孔，"
+              f"挤出 {volume:.1f} mm³（ezdxf {ezdxf.__version__}）")
+        assert volume > 0 and parsed.parameters() == {"bodywidth": 120.0, "plateheight": 40.0}
+
     image = moz.data_path("examples", "Advanced", "surface_image.png")
     section = moz.projection(
         moz.translate([0, 0, -30], moz.surface(image, center=True)), cut=True

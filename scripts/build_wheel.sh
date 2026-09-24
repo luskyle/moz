@@ -57,6 +57,7 @@ checks = {
     "中文字库": "moz_data/fonts/MozSansSC-Regular.ttf" in names,
     "MCAD 字形表": "moz_data/libraries/MCAD/fonts.scad" in names,
     "示例数据": count("moz_data/examples/") > 0,
+    "P1 样例图纸": count("moz_data/drawings/") > 0,
 }
 for label, ok in checks.items():
     print(f"  {'OK  ' if ok else '缺失'} {label}")
