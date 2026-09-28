@@ -5,6 +5,7 @@ PySide6 缺失时整个模块 skip。
 """
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,127 @@ def test_dwg_scene_has_curves_and_hatches(cadview, qt_app):
     _cad, _scene, _per_layer, counts, _missing = scene_of(cadview, path)
     assert sum(counts.values()) > 100
     assert {"LINE", "HATCH", "SPLINE", "CIRCLE"} <= set(counts)
+
+
+# --- 目录与"方便打开"（图纸列表、点击切换、拖拽、demo） ---
+
+
+def test_list_drawings_recursive_and_flat(cadview, tmp_path):
+    (tmp_path / "sub").mkdir()
+    for name in ("a.dxf", "b.DWG", "note.txt"):
+        (tmp_path / name).write_text("0\nEOF\n", encoding="utf-8")
+    (tmp_path / "sub" / "c.dxf").write_text("0\nEOF\n", encoding="utf-8")
+
+    flat = cadview.list_drawings(str(tmp_path))
+    assert [Path(p).name for p in flat] == ["a.dxf", "b.DWG"]          # 不递归、认大小写后缀
+    deep = cadview.list_drawings(str(tmp_path), recursive=True)
+    assert [Path(p).name for p in deep] == ["a.dxf", "b.DWG", "c.dxf"]
+    assert cadview.list_drawings(str(tmp_path), limit=2, recursive=True)  # 有上限
+    assert cadview.list_drawings(str(tmp_path / "empty-missing")) == []
+
+
+def test_view_lists_directory_and_switches_by_click(cadview, qt_app, tmp_path):
+    """打开一张图后，「图纸」面板列出同目录的图纸，点一下（或点条目）就换图。"""
+    for source in ("plate", "bracket", "messy"):
+        shutil.copy(DRAWINGS / f"{source}.dxf", tmp_path / f"{source}.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "plate.dxf")))
+    view.warn_on_error = False                     # 失败时别弹模态框（测试里会挂）
+    assert view.drawings.count() == 3
+    labels = [view.drawings.item(i).text() for i in range(view.drawings.count())]
+    assert labels == ["bracket.dxf", "messy.dxf", "plate.dxf"]
+
+    chosen = view.drawings.item(0)                 # 点第一个
+    view._on_drawing_clicked(chosen)
+    assert Path(view.cad.path).name == "bracket.dxf"
+    assert view.drawings.currentItem().text() == "bracket.dxf"
+
+
+def test_view_open_directory_lists_all(cadview, qt_app, tmp_path):
+    """打开目录：连子目录一起列出来，并自动看第一张。"""
+    (tmp_path / "nested").mkdir()
+    shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "one.dxf")
+    shutil.copy(DRAWINGS / "bracket.dxf", tmp_path / "nested" / "two.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "one.dxf")))
+    view.warn_on_error = False
+    assert view.open_directory(str(tmp_path)) is True
+    assert view.drawings.count() == 2
+    assert Path(view.cad.path).name == "one.dxf"    # 已经在目录里就不换当前这张
+    assert Path(view.directory) == tmp_path
+    view.open_any(str(tmp_path / "nested"))         # open_any 也认目录
+    assert Path(view.cad.path).name == "two.dxf"
+
+
+def test_open_path_failure_keeps_current_view(cadview, qt_app, tmp_path):
+    view = cadview.CadView(cadview.load(str(DRAWINGS / "bracket.dxf")))
+    view.warn_on_error = False
+    before = view.counts
+    assert view.open_path(str(tmp_path / "nope.dxf")) is False
+    assert view.counts == before                    # 当前视图没被动过
+    assert "打不开" in view.window.statusBar().currentMessage()
+
+
+def test_unnamed_block_reference_is_reported(cadview, qt_app):
+    """块名本身就是空的参照（实测有些 DWG 的标注这样）也要报出来，不能静默不画。"""
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="synthetic.dxf")
+    cad.layers.append(cadio.Layer(name="0"))
+    cad.entities.append(cadio.Entity(kind="INSERT", layer="0"))
+    cad.entities.append(cadio.Entity(kind="DIMENSION", layer="0"))
+    missing = []
+    assert list(cadio.iter_draw(cad, missing=missing)) == []
+    assert "(无名块参照)" in missing and "(无名标注块)" in missing
+
+
+def test_dropped_path_accepts_drawings_and_directories(cadview, qt_app, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+
+    class FakeEvent:                                # 只用到 mimeData().urls()
+        def __init__(self, paths):
+            self._data = QMimeData()
+            self._data.setUrls([QUrl.fromLocalFile(str(path)) for path in paths])
+
+        def mimeData(self):
+            return self._data
+
+    drawing = tmp_path / "a.dxf"
+    drawing.write_text("0\nEOF\n", encoding="utf-8")
+    other = tmp_path / "readme.txt"
+    other.write_text("hi", encoding="utf-8")
+
+    assert cadview._dropped_path(FakeEvent([drawing])) == str(drawing)
+    assert cadview._dropped_path(FakeEvent([tmp_path])) == str(tmp_path)
+    assert cadview._dropped_path(FakeEvent([other])) is None
+
+
+def test_demo_lists_samples_reports_and_headless(cadview, monkeypatch, capsys, tmp_path):
+    demo = pytest.importorskip("cadview_demo")
+
+    assert demo.main(["--samples"]) == 0
+    assert "样例图纸" in capsys.readouterr().out
+
+    assert demo.main([str(DRAWINGS / "plate.dxf"), "--report"]) == 0
+    assert "格式：dxf" in capsys.readouterr().out
+
+    assert demo.main([str(tmp_path / "nope.dxf"), "--stats"]) == 2
+    assert "读不了" in capsys.readouterr().err
+
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert demo.main([]) == 1                       # 无显示器：给提示而不是崩
+    assert "没有显示器" in capsys.readouterr().err
+
+
+def test_cli_directory_report_and_stats(cadview, qt_app, tmp_path, capsys):
+    """命令行给目录：--report 逐个打印；--stats 看第一张。"""
+    shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "one.dxf")
+    shutil.copy(DRAWINGS / "bracket.dxf", tmp_path / "two.dxf")
+
+    assert cadview.main([str(tmp_path), "--report"]) == 0
+    out = capsys.readouterr().out
+    assert "one.dxf" in out and "two.dxf" in out and out.count("格式：dxf") == 2
+
+    assert cadview.main([str(tmp_path), "--stats"]) == 0
+    assert "先看第一张" in capsys.readouterr().out
 
 
 # --- 兜底读取 ---

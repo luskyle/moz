@@ -419,17 +419,25 @@ for e in model[:5]:
 
 ### 17b. 直接画图纸：`moz_cadview`（看图器，N2）
 
-`py/moz_cadview.py` 把上面那个模型**直画**出来（QGraphicsScene，不走几何内核）：图层可开关、
-颜色（ACI/真彩/BYLAYER）、线型（虚线/中心线…）、真曲线样条、文字（系统字体）、块展开
-（含阵列与嵌套）、标注（用它的匿名块内容）。装好后入口脚本是 `moz-cadview`。
+`py/moz_cadview.py` 把上面那个模型**直画**出来（QGraphicsScene，不走几何内核）：图纸列表
+（可点着切换）、图层开关、颜色（ACI/真彩/BYLAYER）、线型（虚线/中心线…）、真曲线样条、
+文字（系统字体）、块展开（含阵列与嵌套）、标注（用它的匿名块内容）。装好后入口脚本是
+`moz-cadview`，随手可用的示例是 `py/cadview_demo.py`。
 
 ```bash
-PYTHONPATH=py python3 py/moz_cadview.py 图纸.dwg                 # 打开窗口（带图层开关面板）
-PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report        # 只打印解析报告（无窗口）
-PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --layers         # 图层 + 每层图元数
-PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --stats          # 画了多少 item（无窗口，CI 用）
+PYTHONPATH=py python3 py/cadview_demo.py                      # 当前目录有图纸就直接开（列表可点着换）
+PYTHONPATH=py python3 py/cadview_demo.py 图纸.dwg              # 开一张（图纸/目录都能拖进窗口）
+PYTHONPATH=py python3 py/cadview_demo.py 图纸目录/              # 打开目录：连子目录一起列出来
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report       # 只打印解析报告（无窗口）
+PYTHONPATH=py python3 py/moz_cadview.py 图纸目录/ --report       # 目录：逐个打印报告
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --layers       # 图层 + 每层图元数
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --stats        # 画了多少 item（无窗口，CI 用）
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png --export-svg out.svg
 ```
+
+窗口里：右侧「图纸」面板列出同目录（打开目录时连子目录）的图纸，**点一下就换**；「图层」面板
+按图层开关；`Ctrl+O` 打开文件、`Ctrl+Shift+O` 打开目录、把图纸或目录拖进来、`Home` 重置视角。
+打开失败只在状态栏里说（默认还弹一个提示框，脚本/测试里可以设 `warn_on_error=False`）。
 
 ```python
 import moz_cadview
@@ -437,6 +445,10 @@ import moz_cadview
 cad = moz_cadview.load("图纸.dxf")          # libdxfrw 优先；DXF 读不通时自动用 ezdxf 兜底
 scene, per_layer, counts, missing = moz_cadview.build_scene(cad)   # 需要先有 QApplication
 counts, missing = moz_cadview.export(cad, "out.png", dark=False)   # 也能导 SVG（按扩展名）
+
+view = moz_cadview.CadView(cad, directory="图纸目录", recursive=True)   # 带图纸列表的窗口
+view.open_any("另一个目录")                  # 目录就列出来并看第一张
+print(moz_cadview.list_drawings("图纸目录", recursive=True))        # 目录里的图纸清单
 ```
 
 要点：
@@ -445,8 +457,8 @@ counts, missing = moz_cadview.export(cad, "out.png", dark=False)   # 也能导 S
   也能照常画（实测：上游 libdxfrw 读不了那个二进制样本的对象段，ezdxf 兜底顶上）;
 - **`build_scene` 需要先建 `QApplication`**（无显示器时设 `QT_QPA_PLATFORM=offscreen`）——
   没有它 Qt 会在深处段错误，所以这里提前报错；
-- **块参照查不到定义时会报出来**（`missing`）：实测 DWG 里匿名块名被上游截断（`*U19` → `*U`），
-  不静默画空；
+- **没画出来的东西会报出来**（`missing`）：块参照找不到块定义（实测 DWG 里匿名块名被上游截断
+  `*U19` → `*U`）、块名本身就是空的参照——都不静默画空；
 - 线型是**视觉近似**（真实定义在 LTYPE 表里，没解析）；ACI 颜色用色轮算法（非逐项抄表）；
 - 大图很快：2.7 MB / 5260 个 item 的整图约 0.3 秒。
 - 详细路线与验收见 [librecad-integration.md](librecad-integration.md)。

@@ -430,47 +430,247 @@ def _chains_for(entity, matrix, extent, chord_tolerance):
     return chains
 
 
+def list_drawings(directory, recursive=False, limit=500):
+    """目录里的 DXF/DWG，按路径排序；``recursive=True`` 时连子目录一起找。
+
+    看图器的"图纸列表"用它（打开目录后可以逐个点着看）：显式打开目录用递归，
+    只是顺手列出当前文件所在的同级文件就不递归。
+    """
+    found = []
+    if recursive:
+        for root, _dirs, files in os.walk(directory):
+            for name in sorted(files):
+                if name.lower().endswith((".dxf", ".dwg")):
+                    found.append(os.path.join(root, name))
+                    if len(found) >= limit:
+                        return sorted(found)
+    else:
+        try:
+            for name in sorted(os.listdir(directory)):
+                path = os.path.join(directory, name)
+                if name.lower().endswith((".dxf", ".dwg")) and os.path.isfile(path):
+                    found.append(path)
+        except OSError:
+            return []
+    return sorted(found)
+
+
+def _make_window(on_drop):  # pragma: no cover - 需要 Qt
+    """主窗口：接受"把图纸拖进来就打开"（拖目录也行）。PySide6 延迟导入。"""
+    from PySide6.QtWidgets import QMainWindow
+
+    class CadWindow(QMainWindow):
+        def dragEnterEvent(self, event):
+            if _dropped_path(event) is not None:
+                event.acceptProposedAction()
+
+        def dropEvent(self, event):
+            path = _dropped_path(event)
+            if path is not None:
+                on_drop(path)
+                event.acceptProposedAction()
+
+    return CadWindow()
+
+
+def _dropped_path(event):  # pragma: no cover - 需要 Qt
+    """拖进来的第一个 DXF/DWG 或目录（都不是就返回 None）。"""
+    for url in event.mimeData().urls():
+        if not url.isLocalFile():
+            continue
+        path = url.toLocalFile()
+        if path.lower().endswith((".dxf", ".dwg")) or os.path.isdir(path):
+            return path
+    return None
+
+
 class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
-    """看图窗口：QGraphicsView + 图层开关。"""
+    """看图窗口：QGraphicsView + **图纸列表**（可点着切换）+ 图层开关 + 打开/拖拽换图。"""
 
-    def __init__(self, cad, dark=True, title=None):
+    def __init__(self, cad, dark=True, title=None, directory=None, recursive=False):
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QAction, QPainter
-        from PySide6.QtWidgets import QGraphicsView, QListWidget, QListWidgetItem, QMainWindow
+        from PySide6.QtGui import QAction, QKeySequence, QPainter
+        from PySide6.QtWidgets import QGraphicsView, QListWidget
 
-        self.cad = cad
-        scene, per_layer, counts, missing = build_scene(cad, dark=dark)
-        self.scene = scene
-        self.per_layer = per_layer
-        self.counts = counts
-
-        window = QMainWindow()
-        window.setWindowTitle(title or f"moz-cadview — {os.path.basename(cad.path)}")
-        window.resize(1100, 800)
-        view = QGraphicsView(scene)
+        self.dark = dark
+        self.directory = None
+        self.recursive = recursive
+        window = _make_window(self.open_any)
+        view = QGraphicsView()
         view.setRenderHint(QPainter.Antialiasing, False)
         view.scale(1.0, -1.0)                       # DXF 的 Y 向上，Qt 的 Y 向下
         view.setDragMode(QGraphicsView.ScrollHandDrag)
         view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         window.setCentralWidget(view)
 
-        panel = QListWidget()
+        drawings = QListWidget()                    # 图纸列表：点一下就换图
+        drawings.itemClicked.connect(self._on_drawing_clicked)
+        layers = QListWidget()                      # 图层开关
+        layers.itemChanged.connect(self._on_layer_toggled)
+
+        files = window.menuBar().addMenu("文件")
+        open_action = QAction("打开 DXF/DWG…", window)
+        open_action.setShortcut(QKeySequence.Open)          # Ctrl+O
+        open_action.triggered.connect(self.open_dialog)
+        files.addAction(open_action)
+        open_dir_action = QAction("打开目录…", window)
+        open_dir_action.setShortcut("Ctrl+Shift+O")
+        open_dir_action.triggered.connect(self.open_directory_dialog)
+        files.addAction(open_dir_action)
+        quit_action = QAction("退出", window)
+        quit_action.setShortcut(QKeySequence.Quit)
+        quit_action.triggered.connect(window.close)
+        files.addAction(quit_action)
+
+        views = window.menuBar().addMenu("视图")
+        reset = QAction("重置视角", window)
+        reset.setShortcut("Home")
+        reset.triggered.connect(self.fit)
+        views.addAction(reset)
+
+        window.resize(1200, 800)
+        window.addDockWidget(Qt.RightDockWidgetArea, _dock(window, "图纸", drawings, 300))
+        window.addDockWidget(Qt.RightDockWidgetArea, _dock(window, "图层", layers))
+        self.window = window
+        self.view = view
+        self.drawings = drawings
+        self.layers = layers
+        self.cad = cad
+        self.scene = None
+        self.per_layer = {}
+        self.counts = {}
+        # 打开失败时是否弹模态框（测试/脚本里可以关掉，只留状态栏消息）
+        self.warn_on_error = True
+        if title:
+            self.window.setWindowTitle(title)
+        self._build(cad)
+        self.set_directory(directory or (
+            os.path.dirname(os.path.abspath(cad.path)) if cad.path else os.getcwd()),
+            recursive=recursive)
+
+    # --- 换图（首次、点列表、打开对话框、拖拽都走这里） ---
+
+    def _build(self, cad):
+        """按一张图纸重建场景与图层面板（并把视角适应到内容）。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QListWidgetItem
+
+        scene, per_layer, counts, missing = build_scene(cad, dark=self.dark)
+        self.cad, self.scene, self.per_layer, self.counts = cad, scene, per_layer, counts
+        self.view.setScene(scene)
+        self.window.setWindowTitle(f"moz-cadview — {os.path.basename(cad.path)}")
+        self.layers.blockSignals(True)
+        self.layers.clear()
         for name in sorted(per_layer):
             item = QListWidgetItem(f"{name}（{len(per_layer[name])}）")
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
             item.setData(Qt.UserRole, name)
-            panel.addItem(item)
-        panel.itemChanged.connect(self._on_layer_toggled)
-        window.addDockWidget(Qt.RightDockWidgetArea, _dock(window, "图层", panel))
-
-        reset = QAction("重置视角", window)
-        reset.triggered.connect(self.fit)
-        window.menuBar().addMenu("视图").addAction(reset)
-
-        self.window = window
-        self.view = view
+            self.layers.addItem(item)
+        self.layers.blockSignals(False)
+        note = describe(counts)
+        if missing:
+            note += f"；有 {len(missing)} 个块参照找不到块定义：{missing[:3]}"
+        self.window.statusBar().showMessage(
+            f"{cad.format.upper()} {cad.version}｜{note}｜Ctrl+O 打开、把图纸或目录拖进来也行")
         self.fit()
+
+    def set_directory(self, directory, recursive=False):
+        """把"图纸列表"填成这个目录里的图纸，并选中当前这张（不在里面就不选）。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QListWidgetItem
+
+        self.directory = directory
+        self.recursive = recursive
+        entries = list_drawings(directory, recursive=recursive)
+        current = os.path.abspath(self.cad.path) if self.cad.path else ""
+        self.drawings.blockSignals(True)
+        self.drawings.clear()
+        selected = -1
+        for index, path in enumerate(entries):
+            label = os.path.relpath(path, directory) if recursive else os.path.basename(path)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, path)
+            item.setToolTip(path)
+            self.drawings.addItem(item)
+            if os.path.abspath(path) == current:
+                selected = index
+        self.drawings.blockSignals(False)
+        if selected >= 0:
+            self.drawings.setCurrentRow(selected)
+            self.drawings.scrollToItem(self.drawings.item(selected))
+        return len(entries)
+
+    def _on_drawing_clicked(self, item):
+        from PySide6.QtCore import Qt
+        self.open_path(item.data(Qt.UserRole))
+
+    def open_any(self, path):
+        """打开一个路径：目录就列出来并打开第一张，文件就直接看（拖拽/命令行都走它）。"""
+        if os.path.isdir(path):
+            return self.open_directory(path)
+        return self.open_path(path)
+
+    def open_directory(self, directory, recursive=True):
+        """打开目录：列出里面的图纸（默认连子目录），并看第一张。"""
+        entries = list_drawings(directory, recursive=recursive)
+        if not entries:
+            self.window.statusBar().showMessage(f"这个目录里没有 DXF/DWG：{directory}")
+            if self.warn_on_error:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(self.window, "没有图纸", f"{directory}\n里没有 DXF/DWG")
+            return False
+        current = os.path.abspath(self.cad.path) if self.cad.path else ""
+        target = current if current in {os.path.abspath(p) for p in entries} else entries[0]
+        if not self.open_path(target):
+            return False
+        self.set_directory(directory, recursive=recursive)
+        return True
+
+    def open_path(self, path):
+        """打开另一张图；失败只在状态栏（和弹窗）里说，不动当前视图。"""
+        try:
+            self._build(load(path))
+        except moz_cadio.CadIoError as exc:
+            self.window.statusBar().showMessage(f"打不开 {path}：{exc}")
+            if self.warn_on_error:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self.window, "打不开", str(exc))
+            return False
+        target_dir = os.path.dirname(os.path.abspath(path))
+        if target_dir != self.directory:
+            self.set_directory(target_dir)          # 换目录了：列表面板跟着换（只列同级）
+        else:
+            self._select_current()
+        return True
+
+    def _select_current(self):
+        from PySide6.QtCore import Qt
+        current = os.path.abspath(self.cad.path) if self.cad.path else ""
+        for index in range(self.drawings.count()):
+            if os.path.abspath(self.drawings.item(index).data(Qt.UserRole)) == current:
+                self.drawings.blockSignals(True)
+                self.drawings.setCurrentRow(index)
+                self.drawings.blockSignals(False)
+                self.drawings.scrollToItem(self.drawings.item(index))
+                return
+
+    def open_dialog(self):
+        """标准的"打开图纸"对话框（起始目录就是当前文件所在目录）。"""
+        from PySide6.QtWidgets import QFileDialog
+        start = os.path.dirname(os.path.abspath(self.cad.path)) if self.cad.path else os.getcwd()
+        path, _selected = QFileDialog.getOpenFileName(
+            self.window, "打开图纸", start, "图纸 (*.dxf *.DXF *.dwg *.DWG);;所有文件 (*)")
+        if path:
+            self.open_path(path)
+
+    def open_directory_dialog(self):
+        """"打开目录"对话框：选完就列出里面的图纸（含子目录）。"""
+        from PySide6.QtWidgets import QFileDialog
+        start = self.directory or os.getcwd()
+        directory = QFileDialog.getExistingDirectory(self.window, "打开图纸目录", start)
+        if directory:
+            self.open_directory(directory)
 
     def fit(self):
         from PySide6.QtCore import Qt
@@ -489,10 +689,12 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         self.window.show()
 
 
-def _dock(window, title, widget):  # pragma: no cover - 需要 Qt
+def _dock(window, title, widget, width=None):  # pragma: no cover - 需要 Qt
     from PySide6.QtWidgets import QDockWidget
     dock = QDockWidget(title, window)
     dock.setWidget(widget)
+    if width:
+        dock.setMinimumWidth(width)
     return dock
 
 
@@ -561,9 +763,10 @@ def _layer_table(cad):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="moz-cadview", description="直接画 DXF/DWG（不走几何内核）")
-    parser.add_argument("path", help="要看的 DXF/DWG")
-    parser.add_argument("--report", action="store_true", help="只打印解析报告，不开窗口")
+        prog="moz-cadview", description="直接画 DXF/DWG（不走几何内核）；也可以给一个目录")
+    parser.add_argument("path", help="要看的 DXF/DWG，或一个装着图纸的目录")
+    parser.add_argument("--report", action="store_true",
+                        help="只打印解析报告，不开窗口（给目录就逐个打印）")
     parser.add_argument("--layers", action="store_true", help="只列出图层与每层图元数")
     parser.add_argument("--stats", action="store_true",
                         help="打印画了多少 item（无窗口，CI 用）")
@@ -573,6 +776,25 @@ def main(argv=None):
     parser.add_argument("--height", type=int, default=1200, help="导出高度（默认 1200）")
     parser.add_argument("--light", action="store_true", help="浅色背景")
     args = parser.parse_args(argv)
+
+    directory = args.path if os.path.isdir(args.path) else None
+    if directory:
+        entries = list_drawings(directory, recursive=True)
+        if not entries:
+            print(f"这个目录里没有 DXF/DWG：{directory}", file=sys.stderr)
+            return 2
+        if args.report:                      # 目录 + --report：逐个打印（上限 200 张）
+            for path in entries[:200]:
+                try:
+                    print(moz_cadio.read(path).report())
+                except moz_cadio.CadIoError as exc:
+                    print(f"—— {path}\n   读不了：{exc}")
+                print()
+            if len(entries) > 200:
+                print(f"（还有 {len(entries) - 200} 张没打印）")
+            return 0
+        print(f"目录里有 {len(entries)} 张图纸，先看第一张：{os.path.basename(entries[0])}")
+        args.path = entries[0]
 
     try:
         cad = load(args.path)
@@ -609,9 +831,12 @@ def main(argv=None):
 
     from PySide6.QtWidgets import QApplication
     application = QApplication.instance() or QApplication([sys.argv[0]])
-    view = CadView(cad, dark=not args.light)
+    view = CadView(cad, dark=not args.light, directory=directory, recursive=bool(directory))
     view.show()
-    print(f"{cad.report()}\n\n画到场景里的 item：{describe(view.counts)}")
+    if directory:
+        print(f"右侧「图纸」面板里可以点着切换（共 {view.drawings.count()} 张）。")
+    else:
+        print(f"{cad.report()}\n\n画到场景里的 item：{describe(view.counts)}")
     return application.exec()
 
 

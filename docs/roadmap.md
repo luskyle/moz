@@ -98,7 +98,8 @@
       直画（折线/填充/文字），块与标注展开、图层开关面板、ACI/真彩/BYLAYER 颜色、线型近似、
       真曲线样条（有理 de Boor）、`--export-png/--export-svg/--report/--layers/--stats`（无显示器
       也能跑）；渲染层只认 `moz_cadio` 的规范化模型，DXF 读不通时 ezdxf 兜底；2.7 MB 整图 0.31 秒。
-      19 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
+      **打开目录**后右侧「图纸」列表点着切换（`py/cadview_demo.py` 是随手可用版）；
+      27 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
 - [ ] **DWG 进"图纸 → 模型"（N3）**：`moz_dxf.Drawing` 从规范化实体模型构建，于是 DWG 也能走 P1。
 - [ ] **装配与运动**：间隙、配合、行程。
 - [ ] **自由曲面/NURBS**、**圆角/倒角**（OpenSCAD 无原生倒角）。

@@ -796,14 +796,20 @@ def entity_polygon(entity):
     return [point for point in points if point is not None]
 
 
+def _note(missing, text):
+    """记一条"没画出来的原因"（`iter_draw` 的 missing 清单用）。"""
+    if missing is not None and text not in missing:
+        missing.append(text)
+
+
 def iter_draw(cad, max_depth=8, missing=None):
     """按绘制顺序产出 ``(entity, matrix)``：展开 INSERT（含阵列与嵌套）、
 
     标注用它的匿名块内容代替自身（标注的线/箭头/文字都在块里），只走模型空间。
 
     三重保护防自循环（实测 DWG 里存在）：块名必须非空、深度上限、同一条链上不许重复出现。
-    给了 ``missing``（列表）时，把"块参照找不到块定义"的块名记进去——不静默画空
-    （实测 DWG 里匿名块名会被上游截断成 ``*U``，于是查不到定义）。
+    给了 ``missing``（列表）时，把"没画出来的原因"记进去——不静默画空：块参照找不到块定义
+    （实测 DWG 里匿名块名会被上游截断成 ``*U``）、块名本身就是空的（实测有这种标注/块参照）。
     """
     children = {}
     for entity in cad.entities:
@@ -813,24 +819,30 @@ def iter_draw(cad, max_depth=8, missing=None):
         for entity in entities:
             name = entity.name or ""
             if entity.kind == "INSERT":
-                if not name or depth >= max_depth or name in chain:
+                if not name:
+                    _note(missing, "(无名块参照)")
+                    continue
+                if depth >= max_depth or name in chain:
                     continue
                 block = children.get(name)
                 if not block:
-                    if missing is not None and name not in missing:
-                        missing.append(name)
+                    _note(missing, name)
                     continue
                 for column in range(max(1, entity.colcount)):
                     for row in range(max(1, entity.rowcount)):
                         inner = matrix_multiply(matrix, insert_matrix(entity, column, row))
                         yield from walk(block, inner, depth + 1, chain + (name,))
                 continue
-            if entity.kind == "DIMENSION" and name and depth < max_depth and name not in chain:
-                block = children.get(name)
-                if block:
-                    # 标注块的内容已经是最终位置（WCS），所以矩阵照传
-                    yield from walk(block, matrix, depth + 1, chain + (name,))
+            if entity.kind == "DIMENSION":
+                if not name:
+                    _note(missing, "(无名标注块)")
                     continue
+                if depth < max_depth and name not in chain:
+                    block = children.get(name)
+                    if block:
+                        # 标注块的内容已经是最终位置（WCS），所以矩阵照传
+                        yield from walk(block, matrix, depth + 1, chain + (name,))
+                        continue
             yield entity, matrix
 
     return walk(children.get("", []), IDENTITY_MATRIX, 0, ("",))

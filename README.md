@@ -99,6 +99,17 @@ PYTHONPATH=py python3 py/examples/Basics/CSG.py
 PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
 ```
 
+**看别人的图纸（DXF/DWG）**——不用建模内核，直接画（详见 [docs/librecad-integration.md](docs/librecad-integration.md)）：
+
+```bash
+bash scripts/build_moz_cadio.sh              # 只需 cmake + g++，约 30 秒（不需要 Qt）
+
+PYTHONPATH=py python3 py/cadview_demo.py                    # 当前目录有图纸就直接开（右侧列表可点着切换）
+PYTHONPATH=py python3 py/cadview_demo.py 你的图.dwg          # 开一张；图纸或整个目录都能拖进窗口
+PYTHONPATH=py python3 py/cadview_demo.py 图纸目录/            # 打开目录：里面每张点一下就换
+PYTHONPATH=py python3 py/cadview_demo.py 图.dxf --report     # 只看解析报告（无窗口）
+```
+
 ## Python 直接建模
 
 示例模块统一暴露 `build()`，返回一个 `Shape`（Python 侧**只拼 SCAD 源码**，求值交给引擎）：
