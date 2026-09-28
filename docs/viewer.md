@@ -162,7 +162,7 @@ img = w.grabFramebuffer(); img.save("/tmp/view.png")   # 抓帧后统计像素�
 QGraphicsScene 上：
 
 ```bash
-moz-cadview 图纸目录/                                  # 打开目录：右侧「图纸」列表点着切换
+moz-cadview 图纸目录/                                  # 打开目录：右侧「图纸」列表点着切换（滚轮缩放）
 moz-cadview 图纸.dwg                                   # 打开单张（图纸/目录都能拖进窗口）
 PYTHONPATH=py python3 py/cadview_demo.py               # 随手可用版：启动弹「选择文件 / 选择目录」
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report        # 只打印解析报告
@@ -171,7 +171,8 @@ PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png
 ```
 
 - **图纸列表**：打开一张图就列出同目录的图纸，打开目录则连子目录一起列（`list_drawings()`，
-  上限 500 张、撞上会说明），点条目即换图；`Ctrl+O` 开文件、`Ctrl+Shift+O` 开目录、拖图纸或目录进来；
+  上限 500 张、撞上会说明），点条目即换图（在你选中的目录里点，列表不会收窄）；
+  看图区**滚轮缩放**、左键拖动平移、`Home` 重置视角；`Ctrl+O` 开文件、`Ctrl+Shift+O` 开目录、拖图纸或目录进来；
   对话框默认开在项目根目录（`cadview_demo.start_dir()`）；
 - 数据来自 `py/moz_cadio.py` 的规范化模型（libdxfrw 抽取，DWG 覆盖 R1.40–2018+）；
   DXF 读不通时自动用 ezdxf 兜底，两条路径都喂同一个渲染层；

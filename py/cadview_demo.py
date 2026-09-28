@@ -8,7 +8,8 @@ PYTHONPATH=py python3 py/cadview_demo.py --samples         # 列出随包样例�
 PYTHONPATH=py python3 py/cadview_demo.py 图.dxf --report   # 其余开关原样转发给 moz_cadview
 ```
 
-窗口里：右侧「图纸」面板列出目录里的图纸（点一下就换），「图层」面板按图层开关；
+窗口里：**滚轮缩放**、左键拖动、`Home` 重置视角；右侧「图纸」面板列出目录里的图纸（点一下就换），
+「图层」面板按图层开关；
 `Ctrl+O` 打开文件、`Ctrl+Shift+O` 打开目录、把图纸**或整个目录**拖进来、`Home` 重置视角。
 对话框默认开在**项目根目录**（有 `pyproject.toml`/`.git` 的那层，装成 wheel 时退回随包样例）。
 没有显示器（没有 `DISPLAY`）时开不了窗口，会打印样例清单与用法提示。
