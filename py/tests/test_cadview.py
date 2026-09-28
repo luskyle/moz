@@ -516,6 +516,27 @@ def test_unmatched_block_gets_a_candidate_hint(cadview, qt_app):
     assert cadview._missing_hint(cad, "别的名字") == "找不到块定义 别的名字"        # 没有相近的就不猜
 
 
+def test_empty_and_truncated_dwg_errors_are_explicit(cadview, tmp_path):
+    """0 字节/半截的 .dwg 要说清是"没下完或不是 DWG"，而不是丢一句 DXF 解析失败。"""
+    import moz_cadio as cadio
+
+    empty = tmp_path / "empty.dwg"
+    empty.write_bytes(b"")
+    with pytest.raises(cadio.CadIoError) as info:
+        cadview.load(str(empty))
+    assert "0 字节或没下完" in str(info.value)
+
+    half = tmp_path / "half.dwg"
+    half.write_bytes(b"AC1024" + b"\0" * 200)
+    with pytest.raises(cadio.CadIoError) as info2:
+        cadview.load(str(half))
+    assert "BAD_READ" in str(info2.value)                    # 版本串对、内容不全
+
+    misfiled = tmp_path / "really-dxf.dwg"                   # 扩展名写错：照样能读
+    misfiled.write_text("0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n", encoding="utf-8")
+    assert cadview.load(str(misfiled)) is not None
+
+
 def test_scan_lists_verdicts_with_reasons(cadview, tmp_path, capsys):
     """`--scan` 逐张体检：画得出 / 画不出 / 打不开，并给出原因（不需要 Qt）。"""
     shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "good.dxf")

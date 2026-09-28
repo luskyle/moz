@@ -477,6 +477,15 @@ class Collector : public DRW_Interface {
       if (!c) continue;
       push_point(points, c->x, c->y);
     }
+    if (points.empty() && !data->fitlist.empty()) {
+      /* 只有拟合点（实测有这种图：控制点一个都没给）：拟合点在曲线上，按它连折线是合理近似 */
+      for (const auto &c : data->fitlist) {
+        if (!c) continue;
+        push_point(points, c->x, c->y);
+      }
+      e.flags |= MOZ_CAD_FLAG_FIT_POINTS;
+      f.warn("样条只有拟合点（没有控制点），按拟合点连折线近似");
+    }
     e.npoints = static_cast<int>(points.size() / 2);
     e.points = f.pool.arr(points);
     e.knots = f.pool.arr(data->knotslist);
@@ -487,7 +496,9 @@ class Collector : public DRW_Interface {
     if (data->flags & 1) e.flags |= MOZ_CAD_FLAG_CLOSED;
     if (data->flags & 2) e.flags |= MOZ_CAD_FLAG_PERIODIC;
     if (data->flags & 4) e.flags |= MOZ_CAD_FLAG_RATIONAL;
-    if (data->nfit > 0) f.ignore("样条的拟合点（fit points，我们没有取）");
+    if (data->nfit > 0 && !(e.flags & MOZ_CAD_FLAG_FIT_POINTS)) {
+      f.ignore("样条的拟合点（fit points，我们没有取）");   // 有控制点时拟合点只是参考
+    }
     finish(e);
   }
 

@@ -47,6 +47,7 @@ __all__ = [
     "FLAG_PERIODIC",
     "FLAG_MESH",
     "FLAG_HAS_TEXT",
+    "FLAG_FIT_POINTS",
     "FLAG_TITLE",
     "bulge_arc_points",
     "ellipse_points",
@@ -96,6 +97,7 @@ FLAG_PERIODIC = 1 << 4
 FLAG_MESH = 1 << 5
 FLAG_HAS_TEXT = 1 << 6
 FLAG_TITLE = 1 << 7
+FLAG_FIT_POINTS = 1 << 8    # SPLINE：points 是拟合点（上游没给控制点时的降级）
 
 BYLAYER = 256
 BYBLOCK = 0
@@ -136,6 +138,22 @@ INSUNITS = {
 
 # 线宽（DXF group 370 原值）
 LINEWEIGHT_SPECIAL = {-3: "bydefault", -2: "byblock", -1: "bylayer"}
+
+
+# DWG 文件的前几个字节就是版本串（与 C 层 moz_cadio.cc 的 sniff 一致，这里只用来给更好的报错）
+DWG_MAGIC = ("MC0.0", "AC1.2", "AC1.4", "AC1.50", "AC2.10", "AC1002", "AC1003", "AC1004",
+             "AC1006", "AC1009", "AC1012", "AC1014", "AC1015", "AC1018", "AC1021", "AC1024",
+             "AC1027", "AC1032")
+
+
+def _looks_like_dwg(path) -> bool:
+    """前 6 个字节是不是 DWG 版本串（0 字节/半截/其实不是 DWG 的文件都会是 False）。"""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(6)
+    except OSError:
+        return False
+    return any(head.startswith(magic.encode()) for magic in DWG_MAGIC)
 
 
 class CadIoError(RuntimeError):
@@ -535,6 +553,9 @@ def read(path: str) -> CadFile:
         message = _text(error.value) or "未知原因"
         if error.value:
             lib.moz_str_free(error)
+        if os.path.splitext(path)[1].lower() == ".dwg" and not _looks_like_dwg(path):
+            message += ("\n（这个 .dwg 的前几个字节不是 DWG 版本串：文件可能是 0 字节或没下完，"
+                        "也可能它其实是 DXF/别的格式，只是扩展名写成了 .dwg）")
         raise CadIoError(message)
 
     try:
@@ -680,8 +701,13 @@ def ellipse_points(center, major_end, ratio, start_angle, end_angle, reversed_fl
 
 
 def spline_points(entity, samples=0):
-    """样条：有理 de Boor 求值（RATIONAL 时带权重）；节点向量不合法就退回控制多边形。"""
+    """样条：有理 de Boor 求值（RATIONAL 时带权重）；节点向量不合法就退回控制多边形。
+
+    只有拟合点（`FLAG_FIT_POINTS`）时直接连折线——拟合点本来就在曲线上，这是合理近似。
+    """
     control = [(entity.points[2 * i], entity.points[2 * i + 1]) for i in range(len(entity.points) // 2)]
+    if entity.flags & FLAG_FIT_POINTS:
+        return control
     if len(control) < 2:
         return control
     degree = int(entity.degree) or 3

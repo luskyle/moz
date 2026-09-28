@@ -63,7 +63,8 @@ enum moz_cad_flags {
   MOZ_CAD_FLAG_PERIODIC = 1 << 4,  /* 样条：周期 */
   MOZ_CAD_FLAG_MESH = 1 << 5,      /* 多段线：网格/多面网格形态（本层不展开） */
   MOZ_CAD_FLAG_HAS_TEXT = 1 << 6,  /* 标注：有文字覆盖（group 1） */
-  MOZ_CAD_FLAG_TITLE = 1 << 7      /* 文字：TEXTGEN / 特殊形态，仅作记录 */
+  MOZ_CAD_FLAG_TITLE = 1 << 7,     /* 文字：TEXTGEN / 特殊形态，仅作记录 */
+  MOZ_CAD_FLAG_FIT_POINTS = 1 << 8 /* 样条：points 是**拟合点**（没有控制点时的降级） */
 };
 
 /* --- 一个图元（POD） ---
@@ -78,7 +79,8 @@ enum moz_cad_flags {
  *   LWPOLYLINE        points/bulges（x,y 交错，bulge 每顶点一个），CLOSED，elevation
  *   POLYLINE          同上（3D 网格形态见 MESH，只取顶点）
  *   SPLINE            points 控制点、knots 节点向量、weights 权重（RATIONAL 时），
- *                     degree 次数，CLOSED/PERIODIC
+ *                     degree 次数，CLOSED/PERIODIC；**没有控制点只有拟合点时** points 是拟合点，
+ *                     并置 FIT_POINTS 标志（上游只给了拟合点，按它连折线是合理近似）
  *   INSERT            p1 插入点，name 块名，xscale/yscale/zscale，rotation（弧度），
  *                     colcount/rowcount/colspace/rowspace 阵列参数
  *   TEXT/MTEXT        p1 插入点，text 文字串，height 字高，rotation（弧度），

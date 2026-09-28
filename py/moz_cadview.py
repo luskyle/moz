@@ -514,7 +514,8 @@ def failure_text(path, error):
         f"文件：{path}", "", "打不开：", f"  {error}", "",
         "常见原因：",
         "  · R2.5 及更早的 DWG：上游 libdxfrw 没有对应读取器（报错里会写明）",
-        "  · 文件损坏、部分加密，或用了上游没实现的 DWG 特性（DWG 支持是「尽力而为」）",
+        "  · 文件是 0 字节 / 没有下完（下载中断常见），或文件损坏、部分加密",
+        "  · 用了上游没实现的 DWG 特性（DWG 支持是「尽力而为」）",
         "  · 扩展名是 .dwg/.dxf 而内容其实是别的格式（改对扩展名再试）",
         "  · DXF 连 ezdxf 兜底也失败（消息里会同时给出两种原因）",
         "",
@@ -1021,6 +1022,9 @@ def drawable_count(cad, missing=None, notes=None):
             total += 1 if (entity.text or "").strip() else 0
         elif entity.kind == "POINT":
             total += 1 if entity.p1 else 0
+        elif entity.kind in ("RAY", "XLINE"):
+            # 无限长线由渲染层按图纸尺度拉长（`entity_polylines` 故意不返回它们）
+            total += 1 if (entity.p1 and entity.p2) else 0
         elif any(len(chain) >= 2 for chain in moz_cadio.entity_polylines(entity)):
             total += 1
     return total
