@@ -10,6 +10,7 @@ PYTHONPATH=py python3 py/cadview_demo.py 图.dxf --report   # 其余开关原样
 
 窗口里：右侧「图纸」面板列出目录里的图纸（点一下就换），「图层」面板按图层开关；
 `Ctrl+O` 打开文件、`Ctrl+Shift+O` 打开目录、把图纸**或整个目录**拖进来、`Home` 重置视角。
+对话框默认开在**项目根目录**（有 `pyproject.toml`/`.git` 的那层，装成 wheel 时退回随包样例）。
 没有显示器（没有 `DISPLAY`）时开不了窗口，会打印样例清单与用法提示。
 
 数据来自 `py/moz_cadio.py`（libdxfrw 抽取，DWG 覆盖面 R1.40–2018+）；DXF 读不通时自动用
@@ -41,14 +42,27 @@ def samples():
 
 
 def start_dir():
-    """文件对话框的起始目录：当前目录里有图纸就用它，否则用随包的样例目录。"""
-    here = os.getcwd()
-    try:
-        if any(name.lower().endswith(CAD_SUFFIXES) for name in os.listdir(here)):
-            return here
-    except OSError:
-        pass
-    return sample_dir() if os.path.isdir(sample_dir()) else here
+    """对话框的默认目录：**本项目所在路径**（有 `pyproject.toml` / `.git` 的那一层）。
+
+    装成 wheel（不在仓库里）时退回随包样例目录——总得是个有图纸可挑的地方。
+    """
+    root = project_root()
+    if root:
+        return root
+    return sample_dir() if os.path.isdir(sample_dir()) else os.getcwd()
+
+
+def project_root():
+    """本项目的根目录；认不出来（例如装成 wheel）返回 ``None``。
+
+    `py/moz_cadview.py` 的上一级就是仓库根；再退一层是兜底（模块被挪进子目录的情况）。
+    """
+    here = os.path.dirname(os.path.abspath(moz_cadview.__file__))
+    for candidate in (os.path.dirname(here), here):
+        for marker in ("pyproject.toml", ".git"):
+            if os.path.exists(os.path.join(candidate, marker)):
+                return candidate
+    return None
 
 
 def print_samples(stream=None):

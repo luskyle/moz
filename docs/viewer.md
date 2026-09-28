@@ -170,8 +170,9 @@ PYTHONPATH=py python3 py/moz_cadview.py 图纸目录/ --report        # 目录�
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png
 ```
 
-- **图纸列表**：打开一张图就列出同目录的图纸，打开目录则连子目录一起列（`list_drawings()`），
-  点条目即换图；`Ctrl+O` 开文件、`Ctrl+Shift+O` 开目录、拖图纸或目录进来；
+- **图纸列表**：打开一张图就列出同目录的图纸，打开目录则连子目录一起列（`list_drawings()`，
+  上限 500 张、撞上会说明），点条目即换图；`Ctrl+O` 开文件、`Ctrl+Shift+O` 开目录、拖图纸或目录进来；
+  对话框默认开在项目根目录（`cadview_demo.start_dir()`）；
 - 数据来自 `py/moz_cadio.py` 的规范化模型（libdxfrw 抽取，DWG 覆盖 R1.40–2018+）；
   DXF 读不通时自动用 ezdxf 兜底，两条路径都喂同一个渲染层；
 - 直画保住了原图的**图层、颜色（ACI/真彩/BYLAYER）、线型（近似）、文字（含旋转）、

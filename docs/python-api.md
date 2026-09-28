@@ -435,7 +435,9 @@ PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --stats        # 画了多少
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png --export-svg out.svg
 ```
 
-窗口里：右侧「图纸」面板列出同目录（打开目录时连子目录）的图纸，**点一下就换**；「图层」面板
+对话框（`选择文件…` / `选择目录…`）默认开在**项目根目录**（有 `pyproject.toml`/`.git` 的那层；
+装成 wheel 时退回随包样例目录）。窗口里：右侧「图纸」面板列出同目录（打开目录时连子目录）的图纸，
+**点一下就换**；「图层」面板
 按图层开关；`Ctrl+O` 打开文件、`Ctrl+Shift+O` 打开目录、把图纸或目录拖进来、`Home` 重置视角。
 打开失败只在状态栏里说（默认还弹一个提示框，脚本/测试里可以设 `warn_on_error=False`）。
 

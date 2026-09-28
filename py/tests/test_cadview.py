@@ -327,6 +327,36 @@ def test_demo_startup_dialog_has_file_and_directory_buttons(cadview, qt_app, mon
     assert seen["labels"] == ["选择文件…", "选择目录…", "取消"]
 
 
+def test_demo_start_dir_is_the_project_root(cadview):
+    """对话框默认目录 = 本项目所在路径（这里就是仓库根）。"""
+    demo = pytest.importorskip("cadview_demo")
+    assert Path(demo.project_root()) == ROOT
+    assert Path(demo.start_dir()) == ROOT
+
+
+def test_demo_start_dir_falls_back_to_samples(cadview, monkeypatch):
+    """不在仓库里（装成 wheel）时按"样例目录 → 当前目录"退，而不是给个空地方。"""
+    demo = pytest.importorskip("cadview_demo")
+    monkeypatch.setattr(demo.moz_cadview, "__file__", "/tmp/nowhere/cadview/moz_cadview.py")
+    assert demo.project_root() is None
+    assert Path(demo.start_dir()) == Path.cwd()        # 样例目录也不存在 → 退回当前目录
+    monkeypatch.setattr(demo, "sample_dir", lambda: str(DRAWINGS))
+    assert Path(demo.start_dir()) == DRAWINGS          # 样例目录在 → 用它
+
+
+def test_drawing_list_reports_truncation(cadview, qt_app, tmp_path):
+    """撞上列表上限要说明（项目根这种目录里图纸上千张，不能假装只有这些）。"""
+    for index in range(3):
+        shutil.copy(DRAWINGS / "plate.dxf", tmp_path / f"copy{index}.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "copy0.dxf")), recursive=True)
+    view.warn_on_error = False
+    assert view.open_directory(str(tmp_path)) is True
+    assert view.drawings.count() == 3                  # 没撞上限：正常
+    view.set_directory(str(tmp_path), recursive=True, limit=2)
+    assert view.drawings.count() == 2
+    assert "只列了前 2 张" in view.window.statusBar().currentMessage()
+
+
 def test_demo_lists_samples_reports_and_headless(cadview, monkeypatch, capsys, tmp_path):
     demo = pytest.importorskip("cadview_demo")
 

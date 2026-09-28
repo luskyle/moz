@@ -430,11 +430,14 @@ def _chains_for(entity, matrix, extent, chord_tolerance):
     return chains
 
 
-def list_drawings(directory, recursive=False, limit=500):
+DRAWING_LIMIT = 500          # 图纸列表一次最多列这么多（很多层级的大目录要有个上限）
+
+
+def list_drawings(directory, recursive=False, limit=DRAWING_LIMIT):
     """目录里的 DXF/DWG，按路径排序；``recursive=True`` 时连子目录一起找。
 
     看图器的"图纸列表"用它（打开目录后可以逐个点着看）：显式打开目录用递归，
-    只是顺手列出当前文件所在的同级文件就不递归。
+    只是顺手列出当前文件所在的同级文件就不递归。到 ``limit`` 就截断（调用方应说明）。
     """
     found = []
     if recursive:
@@ -575,14 +578,14 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
             f"{cad.format.upper()} {cad.version}｜{note}｜Ctrl+O 打开、把图纸或目录拖进来也行")
         self.fit()
 
-    def set_directory(self, directory, recursive=False):
+    def set_directory(self, directory, recursive=False, limit=DRAWING_LIMIT):
         """把"图纸列表"填成这个目录里的图纸，并选中当前这张（不在里面就不选）。"""
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QListWidgetItem
 
         self.directory = directory
         self.recursive = recursive
-        entries = list_drawings(directory, recursive=recursive)
+        entries = list_drawings(directory, recursive=recursive, limit=limit)
         current = os.path.abspath(self.cad.path) if self.cad.path else ""
         self.drawings.blockSignals(True)
         self.drawings.clear()
@@ -596,6 +599,10 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
             if os.path.abspath(path) == current:
                 selected = index
         self.drawings.blockSignals(False)
+        if recursive and len(entries) >= limit:
+            # 撞上限就要说出来（项目根这种目录里图纸上千张，不能假装只有这些）
+            self.window.statusBar().showMessage(
+                f"图纸太多，只列了前 {limit} 张（`list_drawings(limit=)` 可调）")
         if selected >= 0:
             self.drawings.setCurrentRow(selected)
             self.drawings.scrollToItem(self.drawings.item(selected))
