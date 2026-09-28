@@ -307,8 +307,21 @@ def _xyz(value):
     return (float(value.x), float(value.y), float(getattr(value, "z", 0.0)))
 
 
+def _empty_notice(missing, notes, warnings=()):
+    """一张图什么都没画出来时，在画面中央写清楚为什么（而不是给一块白板）。"""
+    lines = ["这张图没有可绘制的图元"]
+    if missing:
+        lines.append("原因：" + "、".join(missing[:3]))
+    elif warnings:
+        lines.append("原因：" + str(warnings[0])[:60])
+    if notes:
+        lines.append("推断：" + "、".join(notes[:2]))
+    lines.append("右侧「图纸」面板里点另一张试试")
+    return "\n".join(lines)
+
+
 def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
-    """把模型画成 ``QGraphicsScene``（返回 scene、每层 item、各类型计数、缺定义的块名）。
+    """把模型画成 ``QGraphicsScene``（返回 scene、每层 item、各类型计数、缺块原因、推断说明）。
 
     这里是**直画**：折线、填充、文字各用合适的 item，不做几何内核求值。
     """
@@ -350,8 +363,8 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         return item
 
     scale_box = _drawing_extent(cad)
-    missing = []
-    for entity, matrix in moz_cadio.iter_draw(cad, missing=missing):
+    missing, notes = [], []
+    for entity, matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
         if entity.kind in ("TEXT", "MTEXT"):
             text = (entity.text or "").split("\n")[0]
             if not text or not entity.p1:
@@ -393,7 +406,28 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
             else:
                 item = scene.addPath(path, pen_for(entity))
             add(item, entity, to_scene=False)      # addPath 已经加进场景了
-    return scene, per_layer, counts, missing
+    if not counts and not per_layer:
+        _add_empty_notice(scene, missing, notes, dark, cad.warnings)
+    return scene, per_layer, counts, missing, notes
+
+
+def _add_empty_notice(scene, missing, notes, dark, warnings=()):  # pragma: no cover - 需要 Qt
+    """空画面时写一句原因（场景没有内容，"适应视角"也就没有意义，所以自己定一个画面范围）。"""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QFont, QTransform
+    from PySide6.QtWidgets import QGraphicsSimpleTextItem
+
+    if not scene.sceneRect().isValid() or scene.itemsBoundingRect().isEmpty():
+        scene.setSceneRect(QRectF(-140.0, -80.0, 280.0, 160.0))
+    item = QGraphicsSimpleTextItem(_empty_notice(missing, notes, warnings))
+    font = QFont()
+    font.setPixelSize(12)
+    item.setFont(font)
+    item.setBrush(QColor(255, 220, 120) if dark else QColor(160, 90, 0))
+    item.setPos(-132.0, -34.0)
+    item.setTransform(QTransform().scale(1, -1), True)     # 视图 Y 翻转，文字翻回来
+    scene.addItem(item)
+    return item
 
 
 def _drawing_extent(cad):
@@ -430,7 +464,29 @@ def _chains_for(entity, matrix, extent, chord_tolerance):
     return chains
 
 
+def _is_within(path, root):
+    """``path`` 是否在 ``root`` 目录树里（判断"还在选中的目录里"用）。"""
+    root = os.path.abspath(root)
+    path = os.path.abspath(path)
+    return path == root or path.startswith(root + os.sep)
+
+
 DRAWING_LIMIT = 500          # 图纸列表一次最多列这么多（很多层级的大目录要有个上限）
+
+
+def first_drawable(entries, probe=5):
+    """从前面几张里挑一张**画得出来**的（实测语料里真有整张画不出东西的），都不行就用第一张。
+
+    只探前 ``probe`` 张：在几百张的目录上全都试一遍太慢。
+    """
+    for path in entries[:max(1, probe)]:
+        try:
+            cad = load(path)
+        except moz_cadio.CadIoError:
+            continue
+        if any(True for _ in moz_cadio.iter_draw(cad)):
+            return path
+    return entries[0]
 
 
 def list_drawings(directory, recursive=False, limit=DRAWING_LIMIT):
@@ -487,6 +543,19 @@ def _dropped_path(event):  # pragma: no cover - 需要 Qt
     return None
 
 
+def _make_view():  # pragma: no cover - 需要 Qt
+    """看图用的 QGraphicsView：**滚轮缩放**（以光标为锚点），左键拖动平移。"""
+    from PySide6.QtWidgets import QGraphicsView
+
+    class CadGraphicsView(QGraphicsView):
+        def wheelEvent(self, event):
+            factor = 1.2 if event.angleDelta().y() >= 0 else 1.0 / 1.2
+            self.scale(factor, factor)
+            event.accept()
+
+    return CadGraphicsView()
+
+
 class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
     """看图窗口：QGraphicsView + **图纸列表**（可点着切换）+ 图层开关 + 打开/拖拽换图。"""
 
@@ -499,7 +568,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         self.directory = None
         self.recursive = recursive
         window = _make_window(self.open_any)
-        view = QGraphicsView()
+        view = _make_view()
         view.setRenderHint(QPainter.Antialiasing, False)
         view.scale(1.0, -1.0)                       # DXF 的 Y 向上，Qt 的 Y 向下
         view.setDragMode(QGraphicsView.ScrollHandDrag)
@@ -558,8 +627,9 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QListWidgetItem
 
-        scene, per_layer, counts, missing = build_scene(cad, dark=self.dark)
+        scene, per_layer, counts, missing, notes = build_scene(cad, dark=self.dark)
         self.cad, self.scene, self.per_layer, self.counts = cad, scene, per_layer, counts
+        self.missing, self.notes = missing, notes
         self.view.setScene(scene)
         self.window.setWindowTitle(f"moz-cadview — {os.path.basename(cad.path)}")
         self.layers.blockSignals(True)
@@ -571,11 +641,13 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
             item.setData(Qt.UserRole, name)
             self.layers.addItem(item)
         self.layers.blockSignals(False)
-        note = describe(counts)
+        summary = describe(counts) if counts else "没有可绘制的图元"
         if missing:
-            note += f"；有 {len(missing)} 个块参照找不到块定义：{missing[:3]}"
+            summary += f"；缺块定义 {len(missing)} 个：{missing[:3]}"
+        if notes:
+            summary += f"；{notes[0]}"
         self.window.statusBar().showMessage(
-            f"{cad.format.upper()} {cad.version}｜{note}｜Ctrl+O 打开、把图纸或目录拖进来也行")
+            f"{cad.format.upper()} {cad.version}｜{summary}｜滚轮缩放、左键拖动、Ctrl+O 打开")
         self.fit()
 
     def set_directory(self, directory, recursive=False, limit=DRAWING_LIMIT):
@@ -628,11 +700,18 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
                 QMessageBox.information(self.window, "没有图纸", f"{directory}\n里没有 DXF/DWG")
             return False
         current = os.path.abspath(self.cad.path) if self.cad.path else ""
-        target = current if current in {os.path.abspath(p) for p in entries} else entries[0]
+        if current in {os.path.abspath(p) for p in entries}:
+            target = current
+        else:
+            target = self._first_drawable(entries)
         if not self.open_path(target):
             return False
         self.set_directory(directory, recursive=recursive)
         return True
+
+    def _first_drawable(self, entries, probe=5):
+        """挑一张画得出来的（见模块级 :func:`first_drawable`）。"""
+        return first_drawable(entries, probe)
 
     def open_path(self, path):
         """打开另一张图；失败只在状态栏（和弹窗）里说，不动当前视图。"""
@@ -645,10 +724,13 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
                 QMessageBox.warning(self.window, "打不开", str(exc))
             return False
         target_dir = os.path.dirname(os.path.abspath(path))
-        if target_dir != self.directory:
-            self.set_directory(target_dir)          # 换目录了：列表面板跟着换（只列同级）
+        root = os.path.abspath(self.directory) if self.directory else ""
+        inside = bool(root) and (target_dir == root or
+                                 (self.recursive and _is_within(target_dir, root)))
+        if inside:
+            self._select_current()                  # 还在选中的目录里：列表**保持不动**，只改选中项
         else:
-            self._select_current()
+            self.set_directory(target_dir)          # 换目录了：列表面板跟着换（只列同级）
         return True
 
     def _select_current(self):
@@ -711,7 +793,7 @@ def export(cad, path, *, width=1600, height=1200, dark=True):
     from PySide6.QtGui import QColor, QImage, QPainter
     from PySide6.QtSvg import QSvgGenerator
 
-    scene, _per_layer, counts, missing = build_scene(cad, dark=dark)
+    scene, _per_layer, counts, missing, _notes = build_scene(cad, dark=dark)
     rect = scene.itemsBoundingRect()
     if rect.isValid():
         rect = rect.adjusted(-rect.width() * 0.02 - 1, -rect.height() * 0.02 - 1,
@@ -800,8 +882,8 @@ def main(argv=None):
             if len(entries) > 200:
                 print(f"（还有 {len(entries) - 200} 张没打印）")
             return 0
-        print(f"目录里有 {len(entries)} 张图纸，先看第一张：{os.path.basename(entries[0])}")
-        args.path = entries[0]
+        args.path = first_drawable(entries)
+        print(f"目录里有 {len(entries)} 张图纸，先看：{os.path.basename(args.path)}")
 
     try:
         cad = load(args.path)
@@ -830,9 +912,10 @@ def main(argv=None):
                                      height=args.height, dark=not args.light)
             print(f"已导出 {args.export_svg}（{describe(counts)}）{_missing_note(missing)}")
         if args.stats:
-            scene, per_layer, counts, missing = build_scene(cad, dark=not args.light)
+            scene, per_layer, counts, missing, notes = build_scene(cad, dark=not args.light)
             print(f"图层 {len(per_layer)} 个，item {describe(counts)}"
-                  + (f"；缺块定义 {len(missing)} 个：{missing[:5]}" if missing else ""))
+                  + (f"；缺块定义 {len(missing)} 个：{missing[:5]}" if missing else "")
+                  + (f"；{notes[0]}" if notes else ""))
         del application
         return 0
 

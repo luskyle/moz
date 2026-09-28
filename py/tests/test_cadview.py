@@ -40,7 +40,7 @@ def qt_app():
 
 def scene_of(cadview, path):
     cad = cadview.load(str(path))
-    scene, per_layer, counts, missing = cadview.build_scene(cad)
+    scene, per_layer, counts, missing, notes = cadview.build_scene(cad)
     return cad, scene, per_layer, counts, missing
 
 
@@ -357,6 +357,108 @@ def test_drawing_list_reports_truncation(cadview, qt_app, tmp_path):
     assert "只列了前 2 张" in view.window.statusBar().currentMessage()
 
 
+def test_wheel_zooms_the_view(cadview, qt_app):
+    """看图区域要能**鼠标滚轮缩放**（上滚放大、下滚缩小），事件要被吃掉（不再滚动）。"""
+    from PySide6.QtCore import QPoint
+
+    class Wheel:
+        def __init__(self, delta):
+            self._delta = delta
+            self.accepted = False
+
+        def angleDelta(self):
+            return QPoint(0, self._delta)
+
+        def accept(self):
+            self.accepted = True
+
+    view = cadview.CadView(cadview.load(str(DRAWINGS / "plate.dxf")))
+    view.warn_on_error = False
+    before = view.view.transform().m11()
+    zoom_in = Wheel(120)
+    view.view.wheelEvent(zoom_in)
+    assert zoom_in.accepted
+    assert view.view.transform().m11() > before
+    view.view.wheelEvent(Wheel(-120))
+    assert view.view.transform().m11() == pytest.approx(before, rel=1e-6)
+
+
+def test_directory_stays_when_clicking_inside_it(cadview, qt_app, tmp_path):
+    """打开目录（递归）后点子目录里的图纸，列表**保持**是那个选中的目录，不收窄到子目录。"""
+    (tmp_path / "nested").mkdir()
+    shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "one.dxf")
+    shutil.copy(DRAWINGS / "bracket.dxf", tmp_path / "nested" / "two.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "one.dxf")))
+    view.warn_on_error = False
+    view.open_directory(str(tmp_path))
+    assert view.drawings.count() == 2
+    assert view.open_path(str(tmp_path / "nested" / "two.dxf")) is True
+    assert view.drawings.count() == 2                        # 列表没被收窄
+    assert Path(view.directory) == tmp_path
+    assert view.drawings.currentItem().text() == "nested/two.dxf"   # 递归时显示相对路径
+
+
+def test_empty_drawing_shows_a_notice(cadview, qt_app):
+    """什么都不画的图要在画面上写清原因，而不是给一块白板。"""
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="empty.dxf")
+    cad.layers.append(cadio.Layer(name="0"))
+    cad.entities.append(cadio.Entity(kind="INSERT", layer="0"))       # 无名、文件里也没别的块
+    scene, per_layer, counts, _missing, _notes = cadview.build_scene(cad)
+    assert counts == {} and per_layer == {}
+    texts = [item.text() for item in scene.items() if hasattr(item, "text")]
+    assert any("没有可绘制的图元" in text and "无名块参照" in text for text in texts)
+
+
+def test_unnamed_block_is_inferred_when_it_is_the_only_one(cadview, qt_app):
+    """块名为空、文件里只有一个块时按它画（实测 `large_radial.dwg` 就这样，否则整张空白）。"""
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="one-block.dxf")
+    cad.layers.append(cadio.Layer(name="0"))
+    cad.entities.append(cadio.Entity(kind="DIMENSION", layer="0"))            # 无名标注
+    cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner="*D1",
+                                     p1=(0, 0, 0), p2=(10, 0, 0)))            # 唯一的块内容
+    notes = []
+    drawn = list(cadio.iter_draw(cad, notes=notes))
+    assert len(drawn) == 1 and drawn[0][0].kind == "LINE"
+    assert notes and "*D1" in notes[0]
+    assert list(cadio.iter_draw(cad, notes=[]))[0][0].kind == "LINE"
+
+
+def test_first_drawable_skips_an_empty_first_entry(cadview, monkeypatch, tmp_path):
+    """打开目录时别停在整张空白的图纸上（取前几张里画得出来的那张）。"""
+    import moz_cadio as cadio
+
+    empty = tmp_path / "a_empty.dxf"
+    good = tmp_path / "b_good.dxf"
+    for path in (empty, good):
+        path.write_text("0\nEOF\n", encoding="utf-8")
+
+    def fake_load(path):
+        if Path(path).name == "a_empty.dxf":
+            cad = cadio.CadFile(path=str(path))
+            cad.layers.append(cadio.Layer(name="0"))
+            return cad
+        cad = cadio.read(str(DRAWINGS / "plate.dxf"))
+        cad.path = str(path)                       # 假装就是这张（真读的是样例）
+        return cad
+
+    monkeypatch.setattr(cadview, "load", fake_load)
+    view = cadview.CadView(fake_load(empty), directory=str(tmp_path))
+    view.warn_on_error = False
+    assert Path(view._first_drawable([str(empty), str(good)])).name == "b_good.dxf"
+    assert view.open_directory(str(tmp_path)) is True
+    # 已经看的是目录里的某张：不擅自换走（列表照样列出全部）
+    assert Path(view.cad.path).name == "a_empty.dxf"
+
+    other = tmp_path / "other"                             # 换到另一个目录：挑一张画得出来的
+    other.mkdir()
+    (other / "a_empty.dxf").write_text("0\nEOF\n", encoding="utf-8")
+    (other / "b_good.dxf").write_text("0\nEOF\n", encoding="utf-8")
+    assert view.open_directory(str(other)) is True
+    assert Path(view.cad.path).name == "b_good.dxf"
+
+
 def test_demo_lists_samples_reports_and_headless(cadview, monkeypatch, capsys, tmp_path):
     demo = pytest.importorskip("cadview_demo")
 
@@ -385,7 +487,7 @@ def test_cli_directory_report_and_stats(cadview, qt_app, tmp_path, capsys):
     assert "one.dxf" in out and "two.dxf" in out and out.count("格式：dxf") == 2
 
     assert cadview.main([str(tmp_path), "--stats"]) == 0
-    assert "先看第一张" in capsys.readouterr().out
+    assert "先看：" in capsys.readouterr().out
 
 
 # --- 兜底读取 ---
