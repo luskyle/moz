@@ -318,6 +318,43 @@ def test_broken_file_falls_back_to_recover(moz, tmp_path):
     assert drawing.profile_area() == pytest.approx(100.0, rel=1e-9)
 
 
+def test_comma_decimal_values_are_refused_not_truncated(moz, tmp_path):
+    """小数写成逗号（`2,5`）的图纸要**拒绝**，不能靠修复模式"读出"几何。
+
+    ezdxf 的修复模式会把非法值截断成整数部分（`2,5` → `2.0`、`0,1` → `0.0`），据此能把这张
+    断开的方框变成一个 2×2 正方形（4 mm³）——凭空造出来的几何。引擎对同一张图是空几何
+    （`Illegal value '0,1'`），所以这里也拒绝；上游 `nothing-decimal-comma-separated.dxf`
+    是同一个坑的负例（该文件自己的头部写着 should produce no visible result）。
+    """
+    lines = ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", "4", "0", "ENDSEC",
+             "0", "SECTION", "2", "ENTITIES"]
+    corners = [("0,1", "0,1", "2,5", "0"), ("2,5", "0", "2,5", "2,5"),
+               ("2,5", "2,5", "0", "2,5"), ("0", "2,5", "0,1", "0,1")]
+    for start_x, start_y, end_x, end_y in corners:
+        lines += ["0", "LINE", "8", "0", "10", start_x, "20", start_y, "30", "0",
+                  "11", end_x, "21", end_y, "31", "0"]
+    lines += ["0", "ENDSEC", "0", "EOF", ""]
+    path = tmp_path / "comma.dxf"
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    import ezdxf
+    from ezdxf.lldxf.const import DXFStructureError
+    from ezdxf.recover import readfile as recover_readfile
+
+    with pytest.raises(DXFStructureError, match="floating point"):
+        ezdxf.readfile(str(path))                          # 正常模式读不了：数值不是合法浮点
+
+    recovered, _auditor = recover_readfile(str(path))
+    first = recovered.modelspace().query("LINE")[0]
+    assert tuple(first.dxf.start)[:2] == (0.0, 0.0)        # `0,1` 被截断成 0.0 —— 这就是陷阱
+
+    with pytest.raises(moz.OpenSCADError) as info:
+        moz_dxf.read_dxf(str(path))                        # 我们不接受这种"几何"
+    assert "浮点数" in str(info.value)
+
+    assert moz.eval_text(f'import("{path}");').is_empty    # 引擎同样不产出几何
+
+
 def test_unreadable_file_raises_with_both_reasons(moz, tmp_path):
     """连修复模式都读不了的文件：抛 OpenSCADError，消息里同时给出两种模式的原因。"""
     lines = ["0", "SECTION", "2", "ENTITIES", "0", "LWPOLYLINE", "8", "0", "90", "3"

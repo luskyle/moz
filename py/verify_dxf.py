@@ -48,10 +48,14 @@ CORPORA = [
 # 图纸本身没闭合 / 重叠到成不了环：预期报开口并拒绝挤出（当前语料里没有这类；默认策略
 # open_chains="close" 会像引擎一样隐式闭合，严格模式见 py/moz_dxf.py 的 open_chains="report"）
 EXPECTED_OPEN = set()
-# 病态文件：预期连 ezdxf 的修复模式都读不出来（LWPOLYLINE 缺子类标记）
-# 注意：`nothing-decimal-comma-separated.dxf`（小数点写成逗号）**已经不在这一档**——
-# 加了 ezdxf 修复模式回退之后它也能读了（挤出 4 mm³），现在按正常文件判定。
-EXPECTED_BAD = {"test__data__blocks.dxf"}
+# 病态文件：预期读不出来（读出来也不可信）
+# - `test__data__blocks.dxf`：LWPOLYLINE 缺子类标记，严格读就报错，修复模式同样读不出来；
+# - `nothing-decimal-comma-separated.dxf`：小数写成逗号（`2,5`）。ezdxf 的修复模式会把它截断成
+#   `2.0`，据此能"读出"一个 2×2 正方形（4 mm³）——那是凭空造出来的几何，所以 `py/moz_dxf.py`
+#   按"数值不可信"直接拒绝（`_is_numeric_failure`）。与引擎一致：原生 `import()` 对这张图是
+#   空几何并报 `Illegal value '-6,63671875'`，该文件自己的头部也写着 should produce no visible
+#   result（上游 issue 593 的负例）。
+EXPECTED_BAD = {"test__data__blocks.dxf", "nothing-decimal-comma-separated.dxf"}
 
 # 能参与成环的实体类型
 LOOP_ENTITIES = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE", "HATCH"}

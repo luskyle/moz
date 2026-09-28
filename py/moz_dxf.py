@@ -530,6 +530,22 @@ def _segments_cross(a1, a2, b1, b2):
     return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
 
 
+# 严格读取失败的原因是"数值不是合法浮点数"（典型：欧洲小数逗号 `2,5`）——这类问题不能靠
+# ezdxf 的修复模式兜：它把非法值截断成整数部分（实测 `2,5` → `2.0`、`0,1` → `0.0`），
+# 于是凭空造出几何。对照实测：`3rd/openscad/testdata/dxf/nothing-decimal-comma-separated.dxf`
+# 在引擎里是空几何（控制台 `Illegal value '-6,63671875'`），我们照它拒绝。
+_NUMERIC_FAILURE_MARKERS = (
+    "could not convert string to float",   # ValueError（Py3）
+    "invalid literal for float",           # ValueError（旧写法）
+    "invalid floating point",              # ezdxf 修复模式自己的措辞
+)
+
+
+def _is_numeric_failure(exc):
+    text = str(exc).lower()
+    return any(marker in text for marker in _NUMERIC_FAILURE_MARKERS)
+
+
 # --- 对外 API ---
 
 
@@ -558,6 +574,14 @@ def read_dxf(path, *, layers=None, exclude_layers=None, hole_layers=None, role_p
     try:
         document = ezdxf.readfile(path)
     except Exception as exc:
+        # **数值性**问题不能靠修复模式兜：ezdxf 会把逗号小数截断（`2,5` → `2.0`），
+        # 于是凭空造出几何。引擎对这类文件也是空几何（`Illegal value '-6,63671875'`），照它拒绝。
+        if _is_numeric_failure(exc):
+            raise moz.OpenSCADError(
+                f"解析 DXF 失败：{path}（{type(exc).__name__}: {exc}）——文件里的数值不是合法"
+                "浮点数（例如小数写成逗号），修复模式会把小数截断从而凭空造出几何，所以拒绝；"
+                "引擎的 import() 对这类文件同样产出空几何"
+            ) from exc
         # 真实图纸经常"不合规但可用"（缺子类标记、AC1003 老版本、库图块裸文件…）：
         # ezdxf 有个专门的修复读取器，先试它；仍然不行才算解析失败
         try:
