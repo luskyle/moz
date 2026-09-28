@@ -84,7 +84,9 @@ enum moz_cad_flags {
  *   TEXT/MTEXT        p1 插入点，text 文字串，height 字高，rotation（弧度），
  *                     name 样式名，scalars 的 widthscale/oblique
  *   DIMENSION         dimtype（DXF group 70 原值，&7 得子类），p1 定义点、p2/p3 另两点，
- *                     text 文字覆盖（HAS_TEXT），name 样式名，rotation 文字方向
+ *                     text 文字覆盖（HAS_TEXT），name 是**匿名块名**（group 2，标注的线/箭头/
+ *                     文字都在那个块里；块内容也在 entities 里，用 owner = 该块名归组），
+ *                     rotation 文字方向
  *   HATCH             name 图案名，SOLID，points 是所有边界环摊平后的顶点（弧/椭圆/多段线
  *                     bulge 都按 16 段采样，样条跳过并计告警），环的边界看 loop_offsets
  *                     （前缀和，nloops 个）

@@ -399,7 +399,7 @@ print(cad.report())                                 # 可读的解析报告（�
 
 model = [e for e in cad.entities if e.owner == ""]  # 模型空间（块内实体的 owner 是块名）
 for e in model[:5]:
-    print(e.kind, e.layer, e.point2d("p1"), e.closed, e.dim_kind)
+    print(e.kind, e.layer, e.p2d("p1"), e.closed, e.dim_kind)
 ```
 
 要点：
@@ -415,4 +415,38 @@ for e in model[:5]:
 - **不静默**：被忽略的内容（LEADER 顶点、IMAGE 路径…）与近似处理（剖面线边界曲线按 16 段采样）
   都进 `warnings`，并在 `report()` 里列出来；
 - 语料回归：`PYTHONPATH=py python3 py/verify_cadio.py`（当前 **225 个文件：OK=213、EMPTY=10、
-  预期读不通 3、FAIL=0**）。
+  预期读不通 2、FAIL=0**）。
+
+### 17b. 直接画图纸：`moz_cadview`（看图器，N2）
+
+`py/moz_cadview.py` 把上面那个模型**直画**出来（QGraphicsScene，不走几何内核）：图层可开关、
+颜色（ACI/真彩/BYLAYER）、线型（虚线/中心线…）、真曲线样条、文字（系统字体）、块展开
+（含阵列与嵌套）、标注（用它的匿名块内容）。装好后入口脚本是 `moz-cadview`。
+
+```bash
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dwg                 # 打开窗口（带图层开关面板）
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report        # 只打印解析报告（无窗口）
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --layers         # 图层 + 每层图元数
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --stats          # 画了多少 item（无窗口，CI 用）
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png --export-svg out.svg
+```
+
+```python
+import moz_cadview
+
+cad = moz_cadview.load("图纸.dxf")          # libdxfrw 优先；DXF 读不通时自动用 ezdxf 兜底
+scene, per_layer, counts, missing = moz_cadview.build_scene(cad)   # 需要先有 QApplication
+counts, missing = moz_cadview.export(cad, "out.png", dark=False)   # 也能导 SVG（按扩展名）
+```
+
+要点：
+
+- **渲染层只认规范化模型**：libdxfrw 与 ezdxf 两条解析路径都产出同一种 `CadFile`，所以"兜底读"
+  也能照常画（实测：上游 libdxfrw 读不了那个二进制样本的对象段，ezdxf 兜底顶上）;
+- **`build_scene` 需要先建 `QApplication`**（无显示器时设 `QT_QPA_PLATFORM=offscreen`）——
+  没有它 Qt 会在深处段错误，所以这里提前报错；
+- **块参照查不到定义时会报出来**（`missing`）：实测 DWG 里匿名块名被上游截断（`*U19` → `*U`），
+  不静默画空；
+- 线型是**视觉近似**（真实定义在 LTYPE 表里，没解析）；ACI 颜色用色轮算法（非逐项抄表）；
+- 大图很快：2.7 MB / 5260 个 item 的整图约 0.3 秒。
+- 详细路线与验收见 [librecad-integration.md](librecad-integration.md)。

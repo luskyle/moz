@@ -154,3 +154,22 @@ img = w.grabFramebuffer(); img.save("/tmp/view.png")   # 抓帧后统计像素�
 - 动画**预计算**要逐帧求值，帧多/模型大时打开窗口会慢（状态栏会显示进度）；播放本身是即时的。
 - 每次构造/重载都会重新求值（Python 侧不缓存几何），大模型上「求值」才是耗时大头
   （实测 1.3~31.6 s，而导出 STL + 逐面颜色只要 0.08~1.13 s）。
+
+## 看**别人的**图纸：`moz-cadview`（DXF/DWG）
+
+上面这个预览器看的是"我们求值出来的模型/图纸"；要看**外部**的 DXF/DWG，用另一个看图器
+`py/moz_cadview.py`（入口脚本 `moz-cadview`）——它**不走几何内核**，直接把我们读到的图元画到
+QGraphicsScene 上：
+
+```bash
+moz-cadview 图纸.dwg                                  # 窗口：图层开关面板 + 缩放平移
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report       # 只打印解析报告
+PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png
+```
+
+- 数据来自 `py/moz_cadio.py` 的规范化模型（libdxfrw 抽取，DWG 覆盖 R1.40–2018+）；
+  DXF 读不通时自动用 ezdxf 兜底，两条路径都喂同一个渲染层；
+- 直画保住了原图的**图层、颜色（ACI/真彩/BYLAYER）、线型（近似）、文字（含旋转）、
+  真曲线样条、块与标注**；`%` 之类 SCAD 修饰符与此无关（那是建模侧的事）；
+- 需要 `PySide6`；无显示器时设 `QT_QPA_PLATFORM=offscreen` 也能 `--export-png/--export-svg`。
+  细节见 [python-api.md](python-api.md) §17 与 [librecad-integration.md](librecad-integration.md)。

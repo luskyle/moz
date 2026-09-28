@@ -136,10 +136,24 @@ void          moz_cad_free(moz_cad_file *f);
 | Python 绑定 | `py/moz_cadio.py`（ctypes + 规范化模型：19 种图元、图层/块/颜色/线型、`report()`/`counts()`/`by_layer()`） |
 | 与 ezdxf 交叉核对 | 三个样例图纸的**模型空间逐类一致**（plate/bracket/messy：`CIRCLE 4+DIMENSION 2+LINE 8` 等），圆坐标/半径逐个一致，图层名集合一致，标注文字与 `dxf_dim` 名一致 |
 | DWG | 16 个真实样本全通（AC1014→AC1032 版本阶梯 + 编码页 + 多边形/径向标注/富文本），见 `corpus/dwg/README.md` |
-| 语料回归 | `py/verify_cadio.py`：**225 个文件，OK=213、EMPTY=10、预期读不通 3、FAIL=0** |
+| 语料回归 | `py/verify_cadio.py`：**225 个文件，OK=213、EMPTY=10、预期读不通 2、FAIL=0** |
 | 单元测试 | `py/tests/test_cadio.py` 29 个用例（交叉核对/边界/错误路径/DWG 阶梯） |
 | 打包 | `.so` 进 wheel（`moz_data/lib/libmozcadio.so`）+ `scripts/smoke_installed.py` 在干净 venv 里验过（含"必须用随包那份 .so"的断言） |
 | 实测改掉的两个判断 | ① 构建源从 LibreCAD 树里的 0.5.11 换成**上游 2.0.0**（老那份读不了 AC1018+ 且静默丢实体）；② 逗号小数的图上游会**直接拒绝**（与引擎/`moz_dxf` 态度一致），所以不需要我们再做启发式告警 |
+
+### N2 实现状态：已完成（2026-09-28）
+
+| 验收项 | 结果 |
+| --- | --- |
+| 直画看图器 | `py/moz_cadview.py`：QGraphicsScene 直画（折线/填充/文字/点），块与标注展开、图层开关面板、ACI/真彩/BYLAYER 颜色、线型近似、文字带旋转；入口 `moz-cadview`（也可 `python3 py/moz_cadview.py`） |
+| 渲染层只认模型 | `load()` 先 libdxfrw，DXF 读不通换 ezdxf 兜底（实测上游读不了那个二进制样本的对象段，兜底顶上并给告警）——两条解析路径产出同一种 `CadFile` |
+| 离散口径 | 弧/椭圆按弦高容差、bulge 展开、样条是**有理 de Boor**（RATIONAL 带权重）；与 P1 共用同一套 `entity_polylines`，不出现"两套口径" |
+| 不静默 | 块参照查不到定义（DWG 匿名块名被上游截断 `*U19`→`*U`）、剖面线没有边界环（MPOLYGON）都会报出来 |
+| 性能 | 2.7 MB / 5260 item 的整图约 **0.31 秒**；16 个真实 DWG 全部画得出来 |
+| 导出与无窗口模式 | `--export-png` / `--export-svg` / `--report` / `--layers` / `--stats`（无显示器即可跑） |
+| 测试 | `py/tests/test_cadview.py` **19 个用例**（离散数学、颜色/线型、场景装配、块与标注展开、退化输入、大图性能、兜底读取、导出、命令行） |
+| 打包 | wheel 带 `moz_cadview.py` 与 `moz-cadview` 入口；`scripts/smoke_installed.py` 里 offscreen 画过一遍 |
+| 人眼核对 | 导出 PNG 看过：轮廓、4 个红孔、旋转的标注文字（"plateheight"/"bodywidth"）都在位 |
 
 ## 五、许可与合规
 

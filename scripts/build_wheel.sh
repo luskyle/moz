@@ -58,6 +58,7 @@ checks = {
     "moz_openscad.py": "moz_openscad.py" in names,
     "moz_drawing.py": "moz_drawing.py" in names,
     "moz_cadio.py": "moz_cadio.py" in names,
+    "moz_cadview.py": "moz_cadview.py" in names,
     "类型存根": "moz_openscad.pyi" in names,
     "moz_data/lib/libmozopenscad.so": "moz_data/lib/libmozopenscad.so" in names,
     "moz_data/lib/libmozcadio.so": "moz_data/lib/libmozcadio.so" in names,

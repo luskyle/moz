@@ -27,14 +27,13 @@ CORPORA = [
 ]
 
 # 读不通但**在预期内**（不是我们的问题）。按**后缀**匹配：语料里的文件名是扁平化的。
-#   - bin_dxf_r12.dxf：R12 的**二进制** DXF，上游 libdxfrw 没有这个组合的读取器
 #   - nothing-decimal-comma-separated.dxf：数值写成小数逗号（`2,5`），上游直接拒绝
 #     （BAD_READ_HEADER）——与引擎的 import()（空几何）和 py/moz_dxf.py（拒绝）态度一致
 #   - screw2012binary.dxf：上游自带的二进制样本，**它的对象段两个版本的 libdxfrw 都读不了**
 #     （0.5.11 报 BAD_READ_SECTION、2.0.0 报 BAD_READ_OBJECTS；ezdxf 读它没问题，实体段
 #     也解析得动）——我们的态度是整体报错，不静默给半个图
-EXPECTED_UNREADABLE = ("bin_dxf_r12.dxf", "nothing-decimal-comma-separated.dxf",
-                       "screw2012binary.dxf")
+# 注：`bin_dxf_r12.dxf`（R12 二进制 DXF）曾在这张清单上，上游 2.0.0 已经能读了（实测 AC1009 ✓）。
+EXPECTED_UNREADABLE = ("nothing-decimal-comma-separated.dxf", "screw2012binary.dxf")
 
 
 def is_expected_unreadable(name):

@@ -642,6 +642,11 @@ class Collector : public DRW_Interface {
     e.points = f.pool.arr(points);
     e.nloops = static_cast<int>(offsets.size());
     e.loop_offsets = f.pool.iarr(offsets);
+    if (e.nloops == 0) {
+      /* 实测有这情况：MPOLYGON 形态的实体填充（边界在 ACIS/MPOLYGON 数据里，我们不解），
+         不能默默画个空的 */
+      f.warn("剖面线没有边界环（图案 " + std::string(data->name) + "，可能是 MPOLYGON 形态）");
+    }
     finish(e);
   }
 
@@ -720,6 +725,9 @@ class Collector : public DRW_Interface {
     finish(e);
   }
 
+  /* 标注：dimtype + 文字覆盖（group 1）+ **匿名块名**（group 2）。
+   * 块名是画标注的必需品——标注的线/箭头/文字都在那个块里（块内容也在 entities 里，用 owner 归组）；
+   * 样式名（group 3）这里不暴露：最终几何已经由块固定了。 */
   void dim_common(moz_cad_entity &e, const DRW_Dimension &data) {
     e.dimtype = data.type;
     std::string text = data.getText();
@@ -727,7 +735,9 @@ class Collector : public DRW_Interface {
       e.text = f.pool.str(text);
       e.flags |= MOZ_CAD_FLAG_HAS_TEXT;
     }
-    e.name = f.pool.str(data.getStyle());
+    /* 上游的 getName() 不是 const 成员（只是返回一个拷贝），而回调给的是 const 指针——
+       去掉 const 是安全的，这个方法不改任何状态 */
+    e.name = f.pool.str(const_cast<DRW_Dimension &>(data).getName());
   }
 };
 

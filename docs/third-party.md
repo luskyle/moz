@@ -45,11 +45,11 @@
   拷贝**，实测读不了 `AC1018+` 的真实 DWG（`BAD_READ_BLOCKS`/`BAD_READ_TABLES`/`BAD_READ_FILE_HEADER`）、
   AC1032 直接拒绝，而且 `sample_AC1014` 只读出 104 个实体（上游读 145 —— **它在静默丢几何**）。
   所以构建源是上游 2.0.0；LibreCAD 树里那份连同整棵 LibreCAD 只作参考实现。
-- 已知读不通的样本：LibreCAD 树里的 `screw2012binary.dxf`（对象段两个版本都读不了：
-  0.5.11 报 `BAD_READ_SECTION`、2.0.0 报 `BAD_READ_OBJECTS`；ezdxf 读它没问题）、
-  `bin_dxf_r12.dxf`（R12 的**二进制** DXF，没有这个组合的读取器）、
-  `nothing-decimal-comma-separated.dxf`（小数逗号，上游直接拒绝——与引擎和 `py/moz_dxf.py` 态度一致）。
-  三条都在 `py/verify_cadio.py` 的"预期读不通"清单里记名。
+- 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
+  `screw2012binary.dxf`（对象段两个版本都读不了：0.5.11 报 `BAD_READ_SECTION`、2.0.0 报
+  `BAD_READ_OBJECTS`；ezdxf 读它没问题）、`nothing-decimal-comma-separated.dxf`（小数逗号，
+  上游直接拒绝——与引擎和 `py/moz_dxf.py` 态度一致）。另外 `bin_dxf_r12.dxf`（R12 二进制 DXF）
+  0.5.11 读不了、**2.0.0 已经能读**（不在清单里了）。
 
 ## py/moz_data/libraries/MCAD/fonts.scad —— 自带的字形表（非上游 MCAD）
 

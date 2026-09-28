@@ -141,12 +141,19 @@ def test_vendored_ascii_sample(cadio):
     assert cad.version == "AC1021"
 
 
-def test_binary_dxf_is_supported(cadio):
-    """二进制 DXF 由 libdxfrw 自己识别（哨兵串 "AutoCAD Binary DXF"），R13/R14/2000 都能读。"""
-    path = CORPUS / "ezdxf" / "integration_tests__data__bin_dxf_r13.dxf"
+@pytest.mark.parametrize("name,expected", [("bin_dxf_r12.dxf", {"LINE": 3}),
+                                           ("bin_dxf_r13.dxf", {"LINE": 3}),
+                                           ("bin_dxf_r14.dxf", {"LINE": 3}),
+                                           ("bin_dxf_r2000.dxf", {"TEXT": 1})])
+def test_binary_dxf_is_supported(cadio, name, expected):
+    """二进制 DXF 由 libdxfrw 自己识别（哨兵串 "AutoCAD Binary DXF"）；R12–2000 都读得出来。
+
+    上游 2.0.0 把 R12 的二进制也修好了（树里那份 0.5.11 读不了它）。
+    """
+    path = CORPUS / "ezdxf" / f"integration_tests__data__{name}"
     if not path.exists():
-        pytest.skip("语料缺失")
-    assert kinds(cadio.read(str(path)).entities) == {"LINE": 3}
+        pytest.skip(f"语料缺失：{name}")
+    assert kinds(cadio.read(str(path)).entities) == expected
 
 
 def test_vendored_binary_sample_is_unreadable_and_says_so(cadio):

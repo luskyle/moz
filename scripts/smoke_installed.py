@@ -112,6 +112,20 @@ def main():
     assert os.path.dirname(moz_cadio.lib_path()) == os.path.join(moz.DATA_DIR, "lib"), \
         "应使用随包分发的 libmozcadio.so"
 
+    # 看图器（N2）：直画那条路也要能从装好的包里跑起来（offscreen，无显示器）
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    application = QApplication.instance() or QApplication([sys.argv[0]])
+    import moz_cadview
+
+    cad = moz_cadview.load(drawing_path)
+    _scene, per_layer, counts, missing = moz_cadview.build_scene(cad)
+    items = sum(len(entries) for entries in per_layer.values())
+    print("看图器直画   :", f"{len(per_layer)} 个图层, {items} 个 item,", moz_cadview.describe(counts))
+    assert items > 0 and not missing
+    del application
+
     print("打包 smoke test 全部通过 ✅")
     return 0
 

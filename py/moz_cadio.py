@@ -28,6 +28,7 @@ print(cad.report())
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -37,6 +38,7 @@ __all__ = [
     "CadFile",
     "Entity",
     "Layer",
+    "IDENTITY_MATRIX",
     "KIND_NAMES",
     "FLAG_CLOSED",
     "FLAG_REVERSED",
@@ -46,9 +48,18 @@ __all__ = [
     "FLAG_MESH",
     "FLAG_HAS_TEXT",
     "FLAG_TITLE",
+    "bulge_arc_points",
+    "ellipse_points",
+    "entity_polylines",
+    "entity_polygon",
+    "insert_matrix",
+    "iter_draw",
     "lib_path",
+    "matrix_apply",
+    "matrix_multiply",
     "read",
     "report",
+    "spline_points",
 ]
 
 # --- 与 moz_cadio.h 的 enum 对齐 ---
@@ -378,6 +389,11 @@ class Entity:
         return bool(self.flags & FLAG_MESH)
 
     @property
+    def nloops(self) -> int:
+        """HATCH 的边界环数（``points`` + ``loop_offsets``）。"""
+        return len(self.loop_offsets)
+
+    @property
     def dim_kind(self) -> str | None:
         if self.kind != "DIMENSION":
             return None
@@ -387,7 +403,8 @@ class Entity:
         """第 ``index`` 个顶点的 (x, y)（``points`` 里 x,y 交错）。"""
         return (self.points[2 * index], self.points[2 * index + 1])
 
-    def point2d(self, which: str = "p1"):
+    def p2d(self, which: str = "p1"):
+        """某个点字段的 (x, y)（``p1``/``p2``/``p3``）。"""
         value = getattr(self, which)
         if value is None:
             return None
@@ -570,3 +587,250 @@ def read(path: str) -> CadFile:
 def report(path: str) -> str:
     """便捷入口：读一张图并打印解析报告。"""
     return read(path).report()
+
+
+# --- 几何工具：离散与块展开（渲染器与"图纸 → 模型"共用同一套口径） ---
+
+IDENTITY_MATRIX = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+
+def matrix_multiply(outer, inner):
+    """两个仿射矩阵（m00, m01, m02, m10, m11, m12）相乘：先 inner 后 outer。"""
+    a, b, c, d, e, f = outer
+    g, h, i, j, k, m = inner
+    return (a * g + b * j, a * h + b * k, a * i + b * m + c,
+            d * g + e * j, d * h + e * k, d * i + e * m + f)
+
+
+def matrix_apply(matrix, point):
+    a, b, c, d, e, f = matrix
+    x, y = point[0], point[1]
+    return (a * x + b * y + c, d * x + e * y + f)
+
+
+def insert_matrix(entity, column=0, row=0):
+    """INSERT 的仿射矩阵：缩放 → 旋转 → 平移（阵列偏移按插入的旋转一起转）。"""
+    scale_x = entity.xscale or 1.0
+    scale_y = entity.yscale or 1.0
+    cos_a, sin_a = math.cos(entity.rotation), math.sin(entity.rotation)
+    offset_x = column * entity.colspace
+    offset_y = row * entity.rowspace
+    base = entity.p2d("p1") or (0.0, 0.0)
+    x = base[0] + offset_x * cos_a - offset_y * sin_a
+    y = base[1] + offset_x * sin_a + offset_y * cos_a
+    return (scale_x * cos_a, -scale_y * sin_a, x,
+            scale_x * sin_a, scale_y * cos_a, y)
+
+
+def bulge_arc_points(start, end, bulge, parts=32):
+    """多段线一段的 bulge 弧（bulge = tan(圆心角/4)，正数逆时针）。"""
+    x1, y1 = start
+    x2, y2 = end
+    dx, dy = x2 - x1, y2 - y1
+    chord = math.hypot(dx, dy)
+    if not bulge or chord <= 0.0:
+        return [start, end]
+    theta = 4.0 * math.atan(bulge)
+    radius = chord / (2.0 * math.sin(theta / 2.0))
+    tangent = math.tan(theta / 2.0)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    if abs(tangent) > 1e-12:
+        offset = (chord / 2.0) / tangent
+        cx += -dy / chord * offset
+        cy += dx / chord * offset
+    start_angle = math.atan2(y1 - cy, x1 - cx)
+    points = []
+    for index in range(parts + 1):
+        angle = start_angle + theta * index / parts
+        points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return points
+
+
+def arc_parts(radius, sweep, chord_tolerance):
+    """按弦高容差决定圆弧要分几段（与 moz_dxf 同一口径：段数从弦高反算）。"""
+    radius = abs(radius)
+    if radius <= 0.0 or chord_tolerance <= 0.0:
+        return 8
+    ratio = max(0.0, min(1.0, 1.0 - chord_tolerance / radius))
+    step = 2.0 * math.acos(ratio) if ratio < 1.0 else math.pi
+    if step <= 1e-9:
+        step = math.pi / 16.0
+    return max(4, min(512, int(abs(sweep) / step) + 1))
+
+
+def ellipse_points(center, major_end, ratio, start_angle, end_angle, reversed_flag, chord_tolerance):
+    """椭圆（弧）：中心 + 长轴末端 + 短长比 + 起止**参数**角。"""
+    mx = major_end[0] - center[0]
+    my = major_end[1] - center[1]
+    nx, ny = -my * ratio, mx * ratio
+    radius = math.hypot(mx, my)
+    sweep = end_angle - start_angle
+    if not sweep:
+        sweep = 2.0 * math.pi                     # 全椭圆
+    if reversed_flag:
+        while sweep > 0.0:
+            sweep -= 2.0 * math.pi
+    else:
+        while sweep < 0.0:
+            sweep += 2.0 * math.pi
+    parts = arc_parts(max(radius, radius * ratio), sweep, chord_tolerance)
+    return [(center[0] + mx * math.cos(t) + nx * math.sin(t),
+             center[1] + my * math.cos(t) + ny * math.sin(t))
+            for t in (start_angle + sweep * i / parts for i in range(parts + 1))]
+
+
+def spline_points(entity, samples=0):
+    """样条：有理 de Boor 求值（RATIONAL 时带权重）；节点向量不合法就退回控制多边形。"""
+    control = [(entity.points[2 * i], entity.points[2 * i + 1]) for i in range(len(entity.points) // 2)]
+    if len(control) < 2:
+        return control
+    degree = int(entity.degree) or 3
+    degree = max(1, min(degree, len(control) - 1))
+    knots = list(entity.knots)
+    weights = list(entity.weights) if (entity.flags & FLAG_RATIONAL) and entity.weights else None
+    if weights and len(weights) != len(control):
+        weights = None
+    if len(knots) != len(control) + degree + 1:
+        return control                              # 节点数不合法：画控制多边形（调用方应记告警）
+    count = samples or max(16, 8 * len(control))
+    low, high = knots[degree], knots[len(control)]
+    if high <= low:
+        return control
+    points = []
+    for index in range(count + 1):
+        u = low + (high - low) * index / count
+        points.append(_de_boor(control, knots, weights, degree, u))
+    return points
+
+
+def _de_boor(control, knots, weights, degree, u):
+    """有理 de Boor：先在齐次坐标里求值再投影。"""
+    count = len(control)
+    if u >= knots[count]:
+        index = count - 1
+    elif u <= knots[degree]:
+        index = degree
+    else:
+        index = degree
+        while index < count - 1 and u >= knots[index + 1]:
+            index += 1
+    if weights:
+        homogenous = [(weights[i] * control[i][0], weights[i] * control[i][1], weights[i])
+                      for i in range(count)]
+    else:
+        homogenous = [(control[i][0], control[i][1], 1.0) for i in range(count)]
+    work = [list(homogenous[index - degree + i]) for i in range(degree + 1)]
+    for level in range(1, degree + 1):
+        for i in range(degree, level - 1, -1):
+            j = index - degree + i
+            denominator = knots[j + degree - level + 1] - knots[j]
+            alpha = 0.0 if denominator == 0.0 else (u - knots[j]) / denominator
+            for axis in range(3):
+                work[i][axis] = (1.0 - alpha) * work[i - 1][axis] + alpha * work[i][axis]
+    x, y, w = work[degree]
+    if w:
+        return (x / w, y / w)
+    return (x, y)
+
+
+def entity_polylines(entity, chord_tolerance=0.1):
+    """把一个图元离散成若干折线（点表列表）。曲线按弦高容差、直线原样。"""
+    kind = entity.kind
+    if kind == "LINE":
+        return [[entity.p2d("p1"), entity.p2d("p2")]]
+    if kind == "POINT":
+        return [[entity.p2d("p1")]]
+    if kind == "CIRCLE":
+        center = entity.p2d("p1")
+        parts = arc_parts(entity.radius, 2.0 * math.pi, chord_tolerance)
+        return [[(center[0] + entity.radius * math.cos(2 * math.pi * i / parts),
+                  center[1] + entity.radius * math.sin(2 * math.pi * i / parts))
+                 for i in range(parts + 1)]]
+    if kind == "ARC":
+        center = entity.p2d("p1")
+        sweep = entity.end_angle - entity.start_angle
+        if entity.reversed:
+            while sweep > 0.0:
+                sweep -= 2.0 * math.pi
+        else:
+            while sweep < 0.0:
+                sweep += 2.0 * math.pi
+        parts = arc_parts(entity.radius, sweep, chord_tolerance)
+        return [[(center[0] + entity.radius * math.cos(entity.start_angle + sweep * i / parts),
+                  center[1] + entity.radius * math.sin(entity.start_angle + sweep * i / parts))
+                 for i in range(parts + 1)]]
+    if kind == "ELLIPSE":
+        return [ellipse_points(entity.p2d("p1"), entity.p2d("p2") or (0.0, 0.0), entity.ratio,
+                               entity.start_angle, entity.end_angle, entity.reversed,
+                               chord_tolerance)]
+    if kind == "SPLINE":
+        return [spline_points(entity)]
+    if kind in ("LWPOLYLINE", "POLYLINE"):
+        vertices = [entity.xy(i) for i in range(len(entity.points) // 2)]
+        if not vertices:
+            return []
+        chains = []
+        current = [vertices[0]]
+        for index in range(1, len(vertices)):
+            bulge = entity.bulges[index - 1] if index - 1 < len(entity.bulges) else 0.0
+            arc = bulge_arc_points(vertices[index - 1], vertices[index], bulge)
+            current.extend(arc[1:])
+        chains.append(current)
+        if entity.closed:
+            bulge = entity.bulges[len(vertices) - 1] if len(entity.bulges) >= len(vertices) else 0.0
+            arc = bulge_arc_points(vertices[-1], vertices[0], bulge)
+            chains[0].extend(arc[1:])
+        return chains
+    if kind == "RAY" or kind == "XLINE":
+        return []                                   # 无限长：交给渲染层按视图范围裁（viewer 处理）
+    if kind in ("SOLID", "TRACE", "3DFACE"):
+        return [entity_polygon(entity)]
+    if kind == "HATCH":
+        return [loop for loop in entity.loop_points() if len(loop) > 1]
+    return []
+
+
+def entity_polygon(entity):
+    """闭合填充图元（SOLID/TRACE/3DFACE）的顶点。"""
+    points = [entity.p2d("p1"), entity.p2d("p2"), entity.p2d("p3")]
+    return [point for point in points if point is not None]
+
+
+def iter_draw(cad, max_depth=8, missing=None):
+    """按绘制顺序产出 ``(entity, matrix)``：展开 INSERT（含阵列与嵌套）、
+
+    标注用它的匿名块内容代替自身（标注的线/箭头/文字都在块里），只走模型空间。
+
+    三重保护防自循环（实测 DWG 里存在）：块名必须非空、深度上限、同一条链上不许重复出现。
+    给了 ``missing``（列表）时，把"块参照找不到块定义"的块名记进去——不静默画空
+    （实测 DWG 里匿名块名会被上游截断成 ``*U``，于是查不到定义）。
+    """
+    children = {}
+    for entity in cad.entities:
+        children.setdefault(entity.owner, []).append(entity)
+
+    def walk(entities, matrix, depth, chain):
+        for entity in entities:
+            name = entity.name or ""
+            if entity.kind == "INSERT":
+                if not name or depth >= max_depth or name in chain:
+                    continue
+                block = children.get(name)
+                if not block:
+                    if missing is not None and name not in missing:
+                        missing.append(name)
+                    continue
+                for column in range(max(1, entity.colcount)):
+                    for row in range(max(1, entity.rowcount)):
+                        inner = matrix_multiply(matrix, insert_matrix(entity, column, row))
+                        yield from walk(block, inner, depth + 1, chain + (name,))
+                continue
+            if entity.kind == "DIMENSION" and name and depth < max_depth and name not in chain:
+                block = children.get(name)
+                if block:
+                    # 标注块的内容已经是最终位置（WCS），所以矩阵照传
+                    yield from walk(block, matrix, depth + 1, chain + (name,))
+                    continue
+            yield entity, matrix
+
+    return walk(children.get("", []), IDENTITY_MATRIX, 0, ("",))
