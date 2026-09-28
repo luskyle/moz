@@ -45,6 +45,9 @@
   拷贝**，实测读不了 `AC1018+` 的真实 DWG（`BAD_READ_BLOCKS`/`BAD_READ_TABLES`/`BAD_READ_FILE_HEADER`）、
   AC1032 直接拒绝，而且 `sample_AC1014` 只读出 104 个实体（上游读 145 —— **它在静默丢几何**）。
   所以构建源是上游 2.0.0；LibreCAD 树里那份连同整棵 LibreCAD 只作参考实现。
+- **已知的上游限制（没有回调的实体）**：`DRW_Interface` 里**没有** MLINE（多线）与 HELIX（螺旋）等
+  回调，所以含这些实体的图纸在解析阶段就被上游静默丢掉了（我们看不到、也没法计数）。实测 LibreDWG 的
+  `2000__Multiline.dwg` / `2000__Helix.dwg` 就是这样（模型空间看起来是空的）。
 - **已知的上游限制（匿名块名对不上）**：DWG 里 INSERT 的名字取自 **block record 表**（`intern/dwgreader.cpp:9548` 的 `findTableName(DRW::BLOCK_RECORD, …)`），而块定义的`owner` 名取自**块实体**（`addBlock()`）。匿名块这两处会不一致（实测 `*U` vs `*U19`），于是这类"动态块"图纸的块参照定位不到、我们只能报告原因（面板里还会列出名字相近的候选块）。实测 15 个公开 DWG 里的 3 个 dynamic-block 样本就是这种情况。
 - 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
   `screw2012binary.dxf`（对象段两个版本都读不了：0.5.11 报 `BAD_READ_SECTION`、2.0.0 报
