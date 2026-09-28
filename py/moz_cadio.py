@@ -826,18 +826,11 @@ def entity_polygon(entity):
     return [point for point in points if point is not None]
 
 
-def _dim_block_hint(children):
+def _dim_block_hint(count):
     """给"无名标注块"补一句：文件里有多少个没被引用的 *D 块（对不上但能说明情况）。"""
-    referenced = set()
-    for entities in children.values():
-        for entity in entities:
-            if entity.kind in ("INSERT", "DIMENSION") and entity.name:
-                referenced.add(entity.name)
-    candidates = [owner for owner in children
-                  if owner and owner not in referenced and owner.upper().startswith("*D")]
-    if not candidates:
+    if not count:
         return ""
-    return f"：上游没给块名，文件里有 {len(candidates)} 个没被引用的 *D 块"
+    return f"：上游没给块名，文件里有 {count} 个没被引用的 *D 块"
 
 
 def _note(missing, text):
@@ -855,13 +848,28 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
     ``missing``（列表）记"没画出来的原因"，不静默画空：块参照找不到块定义（实测 DWG 里匿名
     块名会被上游截断成 ``*U``）、块名本身就是空的（实测有这种标注/块参照）。
     ``notes``（列表）记"推断出来的事"：块名为空、而文件里**只有一个块**时按那个块画
-    （实测 ``large_radial.dwg`` 就是这种，不推断的话整张图白板）。
+    （实测 ``large_radial.dwg`` 就是这种，不推断的话整张图白板）；DWG 的匿名标注块按文件名
+    约定整体补画（见下）。
     """
     children = {}
     for entity in cad.entities:
         children.setdefault(entity.owner, []).append(entity)
     named_blocks = [name for name in children if name]
     sole_block = named_blocks[0] if len(named_blocks) == 1 else None
+
+    # DWG 的标注块名：上游 DRW_Dimension::parseDwg 不读标注的块句柄，所以标注实体的块名永远
+    # 是空的，但那些匿名块本身在文件里、几何已经是 WCS（实测块内点与标注的定义点重合）。
+    # 只有"无名标注数 ≥ 没被引用的 *D 块数"时才整体补画：数量对得上才敢认定这些块就是这些
+    # 标注的图形；对不上（可能是被删掉的标注留下的孤儿块）就照旧按"没画出来"报，不猜。
+    referenced = set()
+    for entity in cad.entities:
+        if entity.kind in ("INSERT", "DIMENSION") and entity.name:
+            referenced.add(entity.name)
+    orphan_dims = sorted(name for name in children
+                         if name and name not in referenced and name.upper().startswith("*D"))
+    nameless_dims = sum(1 for entity in cad.entities
+                        if entity.kind == "DIMENSION" and not entity.name)
+    compensate = bool(orphan_dims) and nameless_dims >= len(orphan_dims)
 
     def note(text):
         if notes is not None and text not in notes:
@@ -892,12 +900,15 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
                 continue
             if entity.kind == "DIMENSION":
                 if not name:
+                    if compensate:
+                        continue            # 图形由末尾那次整体补画
                     if sole_block and sole_block not in chain:
                         note(f"无名标注块：按文件里唯一的块 {sole_block} 推断")
                         yield from walk(children[sole_block], matrix, depth + 1,
                                         chain + (sole_block,))
                     else:
-                        _note(missing, "(无名标注块" + _dim_block_hint(children) + ")")
+                        _note(missing,
+                              "(无名标注块" + _dim_block_hint(len(orphan_dims)) + ")")
                     continue
                 if depth < max_depth and name not in chain:
                     block = children.get(name)
@@ -907,4 +918,11 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
                         continue
             yield entity, matrix
 
-    return walk(children.get("", []), IDENTITY_MATRIX, 0, ("",))
+    yield from walk(children.get("", []), IDENTITY_MATRIX, 0, ("",))
+    if compensate:
+        note(f"{len(orphan_dims)} 个标注的图形按匿名块补画（"
+             f"{', '.join(orphan_dims[:4])}{'…' if len(orphan_dims) > 4 else ''}）："
+             f"libdxfrw 读 DWG 时不给标注的块名，这些块没被任何地方引用、"
+             f"几何已经是最终位置（WCS）")
+        for owner in orphan_dims:
+            yield from walk(children[owner], IDENTITY_MATRIX, 1, ("", owner))

@@ -275,3 +275,54 @@ def test_dwg_encoding_page_sample(cadio):
     cad = cadio.read(dwg("tests__fixtures__dwg__ordinary_enc_ac1027_ansi932.dwg"))
     assert cad.version == "AC1027"
     assert kinds(modelspace(cad)) == {"LINE": 3}
+
+
+def test_dwg_insert_names_are_not_truncated(cadio):
+    """块参照的块名必须是**块定义里真有的名字**：DWG 侧上游会给出被截断的匿名占位名。
+
+    实测 `samples__sample_AC1015.dwg`：上游在实体到达时按"块记录句柄"查表，11 个块参照拿到
+    `*T`/`*U` 这种两字符占位名（真名是 `*T9`，表里还没有），于是查不到块定义、整块画不出来。
+    我们在读完整张图后按句柄重查一遍（见 3rd/libdxfrw/moz/moz_cadio.cc 的 resolve_pending）。
+    """
+    cad = cadio.read(dwg("samples__sample_AC1015.dwg"))
+    definitions = {block.name for block in cad.blocks}
+    names = [entity.name for entity in cad.entities if entity.kind == "INSERT"]
+    assert names, "这张图应当有块参照"
+    assert all(name in definitions for name in names), \
+        f"仍有指向不存在块定义的块参照：{sorted(set(names) - definitions)}"
+    assert "*T9" in definitions and "*T9" in set(names)
+
+
+def test_unsupported_entities_are_counted_not_silently_dropped(cadio, tmp_path):
+    """我们还没画的实体族（MLINE 多线、HELIX 螺旋）要**报出数量**，不能默默消失。
+
+    关键事实：`DRW_Interface` 里这些回调**有默认空实现**（不是纯虚），上游也确实会派发
+    （DXF: libdxfrw.cpp:10079/10855）——所以不覆盖就等于静默丢几何。这里手写最小 DXF
+    把两件事一起钉住：同一套控制点做成 SPLINE 是画得出来的（证明 DXF 结构没问题），
+    换成 HELIX/MLINE 则只有计数告警。
+    """
+    knots = "".join(f"40\n{value}\n" for value in (0, 0, 0, 0, 1, 1, 1, 1))
+    controls = "".join(f"10\n{x}\n20\n{y}\n30\n0\n"
+                       for x, y in ((0, 0), (1, 0), (2, 1), (3, 1)))
+    spline_body = "71\n3\n72\n8\n73\n4\n" + knots + controls
+    header, tail = "0\nSECTION\n2\nENTITIES\n0\n", "0\nENDSEC\n0\nEOF\n"
+
+    def read(name, body):
+        path = tmp_path / name
+        path.write_text(header + body + tail, encoding="utf-8")
+        return cadio.read(str(path))
+
+    spline = read("control.dxf", "SPLINE\n8\n0\n100\nAcDbSpline\n70\n0\n" + spline_body)
+    assert kinds(modelspace(spline)) == {"SPLINE": 1} and not spline.warnings
+
+    helix = read("helix.dxf",
+                 "HELIX\n8\n0\n100\nAcDbSpline\n70\n0\n" + spline_body
+                 + "100\nAcDbHelix\n90\n29\n91\n0\n10\n0\n20\n0\n30\n0\n"
+                   "11\n1\n21\n0\n31\n0\n12\n0\n22\n0\n32\n1\n40\n5\n41\n3\n42\n1\n")
+    assert modelspace(helix) == []
+    assert any("1 个HELIX" in text for text in helix.warnings), helix.warnings
+
+    mline = read("mline.dxf", "MLINE\n8\n0\n2\nSTANDARD\n70\n0\n71\n1\n"
+                              "11\n0\n21\n0\n31\n0\n11\n10\n21\n0\n31\n0\n")
+    assert modelspace(mline) == []
+    assert any("1 个MLINE" in text for text in mline.warnings), mline.warnings

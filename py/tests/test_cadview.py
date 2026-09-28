@@ -190,16 +190,22 @@ def test_big_corpus_file_is_fast(cadview, qt_app):
     assert elapsed < 10.0, f"画了 {elapsed:.2f} 秒，太慢"
 
 
-def test_dwg_block_expansion_reports_missing_blocks(cadview, qt_app):
-    """DWG 的匿名块名会被上游截断（实测 `*U19` → `*U`），于是查不到块定义——
+def test_dwg_block_expansion_resolves_truncated_names(cadview, qt_app):
+    """DWG 的匿名块名在上游那里会被截断（实测 `*U19` → `*U`、`*T9` → `*T`）——
 
-    这时要**报出来**（`missing`），不能静默画空。
+    截断名查不到块定义。读完整张图后按「块记录句柄 → 块实体名」补回真名，于是这些块
+    参照全都画得出来、`missing` 是空的（修复前这张图全是 `*U`/`*T` 找不到块定义）。
     """
     path = DWGS / "acadsharp" / "samples__dynamic-blocks__BLOCKVISIBILITYPARAMETER.dwg"
     if not path.exists():
         pytest.skip("DWG 语料缺失")
-    _cad, _scene, _per_layer, _counts, missing = scene_of(cadview, path)
-    assert missing and all(name.startswith("*") for name in missing)
+    cad, _scene, _per_layer, counts, missing = scene_of(cadview, path)
+    assert not missing
+    assert sum(counts.values()) > 10
+    names = {entity.name for entity in cad.entities if entity.kind == "INSERT"}
+    definitions = {block.name for block in cad.blocks}
+    assert names <= definitions, f"块参照仍指向不存在的块：{names - definitions}"
+    assert not [name for name in names if len(name or "") == 2 and name[0] == "*"]
 
 
 def test_dwg_scene_has_curves_and_hatches(cadview, qt_app):
@@ -411,18 +417,54 @@ def test_empty_drawing_shows_a_notice(cadview, qt_app):
 
 
 def test_unnamed_block_is_inferred_when_it_is_the_only_one(cadview, qt_app):
-    """块名为空、文件里只有一个块时按它画（实测 `large_radial.dwg` 就这样，否则整张空白）。"""
+    """块名为空、文件里只有一个**非 `*D`** 块时按它画（否则该块永远没人引用，整张空白）。
+
+    `*D` 名字的块走"按匿名标注块补画"那条路（见下一个用例），这里用别的名字把推断那条路钉住。
+    """
     import moz_cadio as cadio
     cad = cadio.CadFile(path="one-block.dxf")
     cad.layers.append(cadio.Layer(name="0"))
     cad.entities.append(cadio.Entity(kind="DIMENSION", layer="0"))            # 无名标注
-    cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner="*D1",
+    cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner="CONTAINER",
                                      p1=(0, 0, 0), p2=(10, 0, 0)))            # 唯一的块内容
     notes = []
     drawn = list(cadio.iter_draw(cad, notes=notes))
     assert len(drawn) == 1 and drawn[0][0].kind == "LINE"
-    assert notes and "*D1" in notes[0]
+    assert notes and "*D1" not in notes[0] and "CONTAINER" in notes[0]
     assert list(cadio.iter_draw(cad, notes=[]))[0][0].kind == "LINE"
+
+
+def test_unnamed_dimension_blocks_are_drawn_when_the_count_matches(cadview, qt_app):
+    """DWG 的标注块名上游不给（`DRW_Dimension::parseDwg` 不读那个句柄），但块在文件里。
+
+    无名标注数 ≥ 没被引用的 `*D` 块数时按这些块整体补画（实测 `samples__sample_AC1015.dwg`
+    里是 11 : 11，块内几何已经是 WCS）；每个块只画一次，`missing` 里不再有"无名标注块"。
+    """
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="dims.dwg")
+    cad.layers.append(cadio.Layer(name="0"))
+    for _index in range(2):
+        cad.entities.append(cadio.Entity(kind="DIMENSION", layer="0"))            # 2 个无名标注
+    for index in range(2):                                                        # 2 个候选块
+        for x in (0.0, 1.0):
+            cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner=f"*D{index + 3}",
+                                             p1=(x, 0, 0), p2=(x, 1, 0)))
+    missing, notes = [], []
+    drawn = list(cadio.iter_draw(cad, missing=missing, notes=notes))
+    assert len(drawn) == 4                       # 2 个块 × 2 条线，各画一次
+    assert not missing
+    assert len(notes) == 1 and "2 个标注的图形按匿名块补画" in notes[0] and "*D3" in notes[0]
+
+
+def test_dwg_dimensions_get_their_graphics_drawn(cadview, qt_app):
+    """实测的 DWG 档：11 个标注的图形补画出来了（MTEXT 箭头线都在块里），且没有"没画出来的"。"""
+    path = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    _scene, _per_layer, counts, missing, notes = cadview.build_scene(cadview.load(str(path)))
+    assert not missing, missing
+    assert counts.get("MTEXT", 0) >= 10 and counts.get("SOLID", 0) >= 10
+    assert any("标注的图形按匿名块补画" in text and "*D" in text for text in notes)
 
 
 def test_first_drawable_skips_an_empty_first_entry(cadview, monkeypatch, tmp_path):
@@ -460,7 +502,7 @@ def test_first_drawable_skips_an_empty_first_entry(cadview, monkeypatch, tmp_pat
 
 
 def test_problem_panel_shows_the_whole_story(cadview, qt_app):
-    """下方「问题」面板给**全文**（状态栏那行会被截断）：计数、没画出来的原因、读取告警。"""
+    """下方「问题」面板给**全文**（状态栏那行会被截断）：计数、没画出来的原因、推断、读取告警。"""
     view = cadview.CadView(cadview.load(str(DRAWINGS / "bracket.dxf")))
     view.warn_on_error = False
     text = view.report.toPlainText()
@@ -471,7 +513,9 @@ def test_problem_panel_shows_the_whole_story(cadview, qt_app):
     if dwg.exists():
         view.open_path(str(dwg))
         text = view.report.toPlainText()
-        assert "没画出来的原因" in text and "读取时的告警" in text
+        assert "读取时的告警" in text and "推断出来的" in text
+        assert "标注的图形按匿名块补画" in text
+        assert "没画出来的原因" not in text                  # 这张图的块参照/标注块都解析出来了
         assert len(text) > len(view.window.statusBar().currentMessage())   # 面板比状态栏详细
 
 
@@ -508,7 +552,7 @@ def test_leader_and_image_are_drawn(cadview, qt_app):
 
 
 def test_unnamed_dimension_explains_the_candidates(cadview, qt_app):
-    """无名标注块要说清"文件里有几个没被引用的 *D 块"（上游没给块名，我们不做猜测式配对）。"""
+    """候选 `*D` 块比无名标注多（数量对不上）就不补画，只报清"文件里有几个没被引用的 *D 块"。"""
     import moz_cadio as cadio
     cad = cadio.CadFile(path="dims.dwg")
     cad.layers.append(cadio.Layer(name="0"))

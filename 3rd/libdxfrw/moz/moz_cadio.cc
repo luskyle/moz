@@ -15,6 +15,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -268,6 +269,13 @@ void flatten_hatch(const DRW_Hatch &data, std::vector<double> &points, std::vect
 /* 句柄：一个读进来的图纸 */
 struct moz_cad_file {
   Pool pool;
+  /* 块记录句柄 → 块实体名。
+   * 为什么要这张表：DWG 里块参照的名字是"块记录句柄"查表得来的，而上游是在**实体到达时**
+   * 查的——同一张图里实测有块参照拿到被截断的占位名（"*T"/"*U"），而按句柄查块实体得到的是
+   * 真名（"*T9"，上游自己也注释说块实体的名字更准）。所以读完整张图后再按这张表解析一遍。 */
+  std::unordered_map<int, std::string> block_entity_names;
+  /* 读的时候先记账，读完再解析：块记录/块实体的到达顺序在 DWG 里不保证 */
+  std::vector<std::pair<size_t, int>> pending_insert_names;   /* (实体下标, 块记录句柄) */
   std::string format;
   std::string version;
   int insunits = 0;
@@ -285,6 +293,22 @@ struct moz_cad_file {
 
   void warn(const std::string &text) { warnings.push_back(text); }
   void ignore(const std::string &what) { ignored[what] += 1; }
+  /* "*T"/"*U" 这种两字符匿名占位名（真名是 "*T9"/"*U19"） */
+  static bool truncated_name(const char *name) {
+    return name != nullptr && name[0] == '*' && name[1] != '\0' && name[2] == '\0';
+  }
+  /* 读完后统一解析：按块记录句柄把块实体的真名补回到块参照上 */
+  void resolve_pending() {
+    for (const auto &item : pending_insert_names) {
+      if (item.first >= entities.size()) continue;
+      const auto it = block_entity_names.find(item.second);
+      if (it == block_entity_names.end() || it->second.empty()) continue;
+      const char *current = entities[item.first].name;
+      if (current != nullptr && !truncated_name(current)) continue;   /* 上游已经给对了 */
+      entities[item.first].name = pool.str(it->second);
+    }
+  }
+
   void flush_ignored() {
     for (const auto &kv : ignored) {
       warn("忽略 " + std::to_string(kv.second) + " 个" + kv.first);
@@ -356,7 +380,13 @@ class Collector : public DRW_Interface {
   }
 
   /* --- 块 --- */
+  /* addBlockRecord 不实现：上游只在 DXF 通路上调它（dxfrw 的块记录表），而 DXF 的块参照
+     自带 group 2 的块名；DWG 通路根本不给这张表，所以收下来也解析不出东西。 */
+
   void addBlock(const DRW_Block &data) override {
+    if (data.parentHandle != DRW::NoHandle && !data.name.empty()) {
+      f.block_entity_names[static_cast<int>(data.parentHandle)] = data.name;
+    }
     moz_cad_block block{};
     block.name = f.pool.str(data.name);
     block.base_point[0] = data.basePoint.x;
@@ -508,6 +538,17 @@ class Collector : public DRW_Interface {
     moz_cad_entity &e = begin(MOZ_CAD_INSERT, data);
     set_point(e.p1, data.basePoint);
     e.name = f.pool.str(data.name);
+    if (data.blockRecH.ref != 0) {
+      /* 按块记录句柄查块实体的真名：命中就立刻用（块实体的名字比上游查表得到的更可靠），
+         没命中就记账，读完再解析（块表/块实体的到达顺序在 DWG 里不保证） */
+      auto it = f.block_entity_names.find(static_cast<int>(data.blockRecH.ref));
+      if (it != f.block_entity_names.end() && !it->second.empty()) {
+        e.name = f.pool.str(it->second);
+      } else {
+        f.pending_insert_names.emplace_back(f.entities.size() - 1,
+                                           static_cast<int>(data.blockRecH.ref));
+      }
+    }
     e.rotation = data.angle;                 /* 类里就是弧度 */
     e.xscale = data.xscale;
     e.yscale = data.yscale;
@@ -689,6 +730,24 @@ class Collector : public DRW_Interface {
   void addComment(const char *comment) override { (void)comment; }
   void addPlotSettings(const DRW_PlotSettings *data) override { (void)data; }
 
+  /* --- 上游会派发、但我们还没画的实体 ---
+     这些回调在 DRW_Interface 里**有默认空实现**，所以不覆盖就不会报错、实体直接消失；
+     上游确实会派发它们（DXF: libdxfrw.cpp:10079 addMLine / 10855 addHelix；
+     DWG: dwgreader.cpp:9904 / 10257）。所以至少把数量说出来，不静默画空。 */
+  void addMLine(const DRW_MLine *data) override { (void)data; f.ignore("MLINE（多线）"); }
+  void addHelix(const DRW_Helix *data) override { (void)data; f.ignore("HELIX（螺旋）"); }
+  void addMLeader(const DRW_MLeader *data) override { (void)data; f.ignore("MLEADER（多重引线）"); }
+  void addShape(const DRW_Shape &data) override { (void)data; f.ignore("SHAPE（形）"); }
+  void addMesh(const DRW_Mesh &data) override { (void)data; f.ignore("MESH（网格）"); }
+  void addSurface(const DRW_Surface *data) override { (void)data; f.ignore("SURFACE（曲面）"); }
+  void addWipeout(const DRW_Wipeout *data) override { (void)data; f.ignore("WIPEOUT（遮罩）"); }
+  void addUnderlay(const DRW_Underlay *data) override { (void)data; f.ignore("UNDERLAY（底图参照）"); }
+  void addProxyEntity(const DRW_ProxyEntity &data) override {
+    (void)data;
+    f.ignore("代理实体（上游不解其几何）");
+  }
+  /* ATTDEF（属性定义）不报：它在块定义里、插入时由 ATTRIB 顶替，本来就不该画出来 */
+
   /* --- 写侧（我们只读；这些纯虚必须实现） --- */
   void writeHeader(DRW_Header &data) override { (void)data; }
   void writeBlocks() override {}
@@ -756,7 +815,10 @@ class Collector : public DRW_Interface {
       e.flags |= MOZ_CAD_FLAG_HAS_TEXT;
     }
     /* 上游的 getName() 不是 const 成员（只是返回一个拷贝），而回调给的是 const 指针——
-       去掉 const 是安全的，这个方法不改任何状态 */
+       去掉 const 是安全的，这个方法不改任何状态。
+       DWG 里这个名字**永远是空的**：上游 DRW_Dimension::parseDwg 把块句柄置成空句柄后
+       再没填过（实测：块句柄恒为 0），所以标注的匿名块名拿不到，只能由绘制侧按
+       "文件里没被引用的 *D 块"补（见 py/moz_cadio.py 的 iter_draw）。 */
     e.name = f.pool.str(const_cast<DRW_Dimension &>(data).getName());
   }
 };
@@ -815,6 +877,7 @@ moz_cad_file *moz_cad_read(const char *path, char **err) {
     set_err(err, failure);
     return nullptr;
   }
+  f->resolve_pending();       /* 块记录/块实体名都到齐了，再把块参照的名字解析一遍 */
   f->flush_ignored();
   return f;
 }

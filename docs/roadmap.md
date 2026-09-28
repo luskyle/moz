@@ -99,8 +99,15 @@
       真曲线样条（有理 de Boor）、`--export-png/--export-svg/--report/--layers/--stats`（无显示器
       也能跑）；渲染层只认 `moz_cadio` 的规范化模型，DXF 读不通时 ezdxf 兜底；2.7 MB 整图 0.31 秒。
       **打开目录**后右侧「图纸」列表点着切换（`py/cadview_demo.py` 是随手可用版）；
-      27 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
+      46 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
+      **匿名块名两处短板已修**（2026-09-28）：块参照的占位名（`*U19`→`*U`、`*T9`→`*T`）读完按
+      「块记录句柄 → 块实体名」重解析，DWG 标注块名上游根本不给时按"没被引用的 `*D…` 块"整体补画
+      （数量对得上才补，面板写明补了哪些）；**还没画的实体族**（MLEADER/MLINE/MESH/SHAPE/WIPEOUT/…）
+      现在都计数进面板——实测同一张样本里 15 个 MLEADER、3 个 MLINE、2 个 MESH 以前是静默丢掉的。
 - [ ] **DWG 进"图纸 → 模型"（N3）**：`moz_dxf.Drawing` 从规范化实体模型构建，于是 DWG 也能走 P1。
+- [ ] **补画还没实现的实体族**：MLEADER（多重引线）、MLINE（多线，要按 `addMLineStyle` 的样式算每条
+      平行线偏移）、HELIX（螺旋）、MESH/SURFACE、WIPEOUT、UNDERLAY——现在有数量、有位置信息可查，
+      但几何还没画。
 - [ ] **装配与运动**：间隙、配合、行程。
 - [ ] **自由曲面/NURBS**、**圆角/倒角**（OpenSCAD 无原生倒角）。
 - [ ] **公差与合格判定**（可检验性）。

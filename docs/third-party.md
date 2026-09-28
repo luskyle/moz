@@ -45,10 +45,26 @@
   拷贝**，实测读不了 `AC1018+` 的真实 DWG（`BAD_READ_BLOCKS`/`BAD_READ_TABLES`/`BAD_READ_FILE_HEADER`）、
   AC1032 直接拒绝，而且 `sample_AC1014` 只读出 104 个实体（上游读 145 —— **它在静默丢几何**）。
   所以构建源是上游 2.0.0；LibreCAD 树里那份连同整棵 LibreCAD 只作参考实现。
-- **已知的上游限制（没有回调的实体）**：`DRW_Interface` 里**没有** MLINE（多线）与 HELIX（螺旋）等
-  回调，所以含这些实体的图纸在解析阶段就被上游静默丢掉了（我们看不到、也没法计数）。实测 LibreDWG 的
-  `2000__Multiline.dwg` / `2000__Helix.dwg` 就是这样（模型空间看起来是空的）。
-- **已知的上游限制（匿名块名对不上）**：DWG 里 INSERT 的名字取自 **block record 表**（`intern/dwgreader.cpp:9548` 的 `findTableName(DRW::BLOCK_RECORD, …)`），而块定义的`owner` 名取自**块实体**（`addBlock()`）。匿名块这两处会不一致（实测 `*U` vs `*U19`），于是这类"动态块"图纸的块参照定位不到、我们只能报告原因（面板里还会列出名字相近的候选块）。实测 15 个公开 DWG 里的 3 个 dynamic-block 样本就是这种情况。
+- **已知的上游限制（块参照的匿名块名会被截断）**：DWG 里 INSERT 的名字取自 **block record 表**
+  （`intern/dwgreader.cpp:9548` 的 `findTableName(DRW::BLOCK_RECORD, …)`），而块定义的名字在**块实体**
+  那边（`addBlock()`）。查表发生在**实体到达时**，那张表可能还没填，于是名字被截成占位名（实测
+  `*U19` → `*U`、`*T9` → `*T`），这类块参照查不到块定义、整块画不出来。**解法**：读完整张图后按
+  「块记录句柄 → 块实体名」重查一遍（`3rd/libdxfrw/moz/moz_cadio.cc` 的 `resolve_pending()`），
+  实测 16 个 DWG 样本里的块参照全部落到真实块定义上（`py/tests/test_cadio.py` 钉住了这项）。
+- **已知的上游限制（DWG 标注的块名拿不到）**：`DRW_Dimension::parseDwg` 把标注的块句柄置成空句柄
+  后再没填过（实测块句柄恒为 0），所以 DWG 里标注实体的块名**永远是空的**，而标注的线/箭头/文字
+  都在那个匿名块里。这些块本身在文件里（`*D…`）、没被任何地方引用、几何已经是最终位置（WCS，
+  实测块内点与标注定义点重合 0.000）。**解法**：绘制侧按"没被引用的 `*D` 块"整体补画，且只在
+  「无名标注数 ≥ 候选块数」时才做（数量对得上才敢认定）；对不上就只报告、不猜
+  （`py/moz_cadio.py` 的 `iter_draw`，面板里会写明这次补画了哪些块）。
+- **我们还没画的实体族（上游会派发、`DRW_Interface` 给的是默认空实现）**：MLINE（多线）、
+  HELIX（螺旋）、MLEADER（多重引线）、SHAPE（形）、MESH（网格）、SURFACE（曲面）、WIPEOUT（遮罩）、
+  UNDERLAY（底图参照）、代理实体。**这些回调不是纯虚**，不覆盖就等于静默丢几何（上游确实会派发它们：
+  DXF 侧 `libdxfrw.cpp:10079`/`10855`，DWG 侧 `intern/dwgreader.cpp:9904`/`10257`）。现在**统一报数量**
+  （`忽略 N 个MLEADER（多重引线）` 这样进面板），`py/tests/test_cadio.py` 用手写的最小 DXF 钉住
+  HELIX/MLINE 两条。实测 ACadSharp 那张版本阶梯样本每张就含 **15 个 MLEADER、3 个 MLINE、2 个 MESH、
+  1 个 SHAPE、1 个 UNDERLAY、1 个 WIPEOUT**——以前全都不声不响地没了。**画出来还没做**：
+  MLINE 要按样式算每条平行线的偏移（样式在 `addMLineStyle`，我们没取），MLEADER 要解析 context。
 - 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
   `screw2012binary.dxf`（对象段两个版本都读不了：0.5.11 报 `BAD_READ_SECTION`、2.0.0 报
   `BAD_READ_OBJECTS`；ezdxf 读它没问题）、`nothing-decimal-comma-separated.dxf`（小数逗号，
