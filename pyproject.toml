@@ -14,7 +14,7 @@ dependencies = [
 
 [tool.setuptools]
 package-dir = {"" = "py"}
-py-modules = ["moz_openscad", "moz_viewer", "moz_drawing", "moz_dxf", "demo"]
+py-modules = ["moz_openscad", "moz_viewer", "moz_drawing", "moz_dxf", "moz_cadio", "demo"]
 # moz_data 只放运行时数据（配色方案、字体、MCAD 库、示例数据、预编译 .so）
 packages = ["moz_data"]
 include-package-data = true

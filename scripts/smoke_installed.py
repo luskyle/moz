@@ -102,6 +102,16 @@ def main():
     print("surface 高度图:", section.facets, "个顶点, 面积", round(section.area, 1))
     assert section.area > 0
 
+    # DXF/DWG 读出（N1）：libmozcadio.so 是随包的第二个 .so，必须能从 <数据目录>/lib 找到
+    import moz_cadio
+    cad = moz_cadio.read(drawing_path)
+    model = [entity for entity in cad.entities if entity.owner == ""]
+    print("DXF 读出     :", os.path.basename(moz_cadio.lib_path()), "|", cad.version,
+          "| 模型空间", len(model), "个", cad.counts())
+    assert cad.counts().get("CIRCLE") == 4
+    assert os.path.dirname(moz_cadio.lib_path()) == os.path.join(moz.DATA_DIR, "lib"), \
+        "应使用随包分发的 libmozcadio.so"
+
     print("打包 smoke test 全部通过 ✅")
     return 0
 

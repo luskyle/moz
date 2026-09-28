@@ -69,6 +69,7 @@ docs/                    文档
 | 截面 / 轮廓投影（任意视线方向的切平面 → 2D）                          | `moz.section()` / `moz.outline()` / `moz.view_basis()` |
 | 2D 工程图（视图、剖视、尺寸标注、图框标题栏；导出 SVG/DXF/PDF）        | `py/moz_drawing.py`，示例 `py/drawing_demo.py`           |
 | 图纸 → 模型（解析 DXF、图层语义、轮廓修复、标注取值、挤出成型；P1） | `py/moz_dxf.py`，演示 `py/dxf_demo.py`，回归 `py/verify_dxf.py` |
+| 查阅别人的图纸：**DXF/DWG** 读出（全部图元 + 图层/线型/颜色语义） | `py/moz_cadio.py`（libdxfrw 抽取，DWG 覆盖面 R1.40–2018+），回归 `py/verify_cadio.py` |
 | 动画帧（逐帧设`$t` 并回调，对应上游 `--animate`）                  | `moz.eval_animation()`                                     |
 | 库搜索路径运行时接口                                                   | `moz.add_library_path()` / `moz.library_paths()`         |
 | 校验「Python 版和原生`.scad` 是不是同一个几何」                      | `py/verify_examples.py`                                    |
@@ -134,6 +135,7 @@ PYTHONPATH=py python3 py/moz_viewer.py py/examples/Basics/CSG.py     # 或把任
 | Python API 参考                                | [docs/python-api.md](docs/python-api.md)         |
 | 截面与 2D 工程图（视图、剖视、尺寸标注、导出） | [docs/drawing.md](docs/drawing.md)               |
 | 图纸 → 模型（2D → 3D 的链路、选型与阶段）      | [docs/2d-to-3d.md](docs/2d-to-3d.md)             |
+| 读 DXF/**DWG**（libdxfrw 抽取、C ABI、渲染集成） | [docs/librecad-integration.md](docs/librecad-integration.md) |
 | 示例组织方式与迁移`.scad` 的清单             | [docs/examples.md](docs/examples.md)             |
 | 保真度验证方法、判据与当前结果                 | [docs/verification.md](docs/verification.md)     |
 | **SCAD 语义陷阱（实测清单）**            | [docs/scad-semantics.md](docs/scad-semantics.md) |

@@ -29,6 +29,9 @@ jobs:
       - name: Build the geometry core
         run: JOBS=$(nproc) bash scripts/build_moz_openscad.sh
 
+      - name: Build the DXF/DWG reading library
+        run: bash scripts/build_moz_cadio.sh
+
       - name: Lint
         run: ruff check .
 
@@ -40,6 +43,9 @@ jobs:
 
       - name: Drawing import regression (upstream DXF corpus)
         run: PYTHONPATH=py python3 py/verify_dxf.py
+
+      - name: Drawing read-back regression (DXF + DWG corpus)
+        run: PYTHONPATH=py python3 py/verify_cadio.py
 
       - name: Package the wheel and smoke-test the installed copy
         run: |

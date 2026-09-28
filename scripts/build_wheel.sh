@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 打一个自带 libmozopenscad.so 与运行时数据的 wheel（平台相关，如 py3-none-linux_x86_64）。
+# 打一个自带 libmozopenscad.so / libmozcadio.so 与运行时数据的 wheel（平台相关，如 py3-none-linux_x86_64）。
 #
 # 步骤：
-#   1) 缺共享库时先构建（scripts/build_moz_openscad.sh）
-#   2) 把 build/lib/libmozopenscad.so 拷进 py/moz_data/lib/（该目录不入库）
-#   3) bdist_wheel，并检查 wheel 里真的带上了 .so、配色方案、字体、MCAD 字形表、示例数据
+#   1) 缺共享库时先构建（scripts/build_moz_openscad.sh、scripts/build_moz_cadio.sh）
+#   2) 把 build/lib/*.so 拷进 py/moz_data/lib/（该目录不入库）
+#   3) bdist_wheel，并检查 wheel 里真的带上了两个 .so、配色方案、字体、MCAD 字形表、示例数据
 #
 # 用法：
 #     bash scripts/build_wheel.sh
@@ -13,6 +13,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SO="$ROOT/build/lib/libmozopenscad.so"
+SO_CAD="$ROOT/build/lib/libmozcadio.so"
 DEST="$ROOT/py/moz_data/lib"
 OUT="${OUT:-$ROOT/build/dist}"
 # 平台标签：纯 C ABI 的 .so 不需要 cp3xx 标签，但必须带上平台（否则会在别的平台上被装上）
@@ -23,11 +24,18 @@ if [[ ! -f "$SO" ]]; then
   bash "$ROOT/scripts/build_moz_openscad.sh"
 fi
 
+if [[ ! -f "$SO_CAD" ]]; then
+  echo "== 没有 $SO_CAD，先构建 DXF/DWG 解析库 =="
+  bash "$ROOT/scripts/build_moz_cadio.sh"
+fi
+
 mkdir -p "$DEST" "$OUT"
 # 原子替换：正在跑的进程可能映射着旧文件，直接覆盖会 SIGBUS
-cp -f "$SO" "$DEST/libmozopenscad.so.tmp"
-mv -f "$DEST/libmozopenscad.so.tmp" "$DEST/libmozopenscad.so"
-echo "== 已就位: $DEST/libmozopenscad.so ($(du -h "$DEST/libmozopenscad.so" | cut -f1)) =="
+for lib in libmozopenscad.so libmozcadio.so; do
+  cp -f "$ROOT/build/lib/$lib" "$DEST/$lib.tmp"
+  mv -f "$DEST/$lib.tmp" "$DEST/$lib"
+  echo "== 已就位: $DEST/$lib ($(du -h "$DEST/$lib" | cut -f1)) =="
+done
 
 # 注意 --build-base：setuptools 默认的暂存目录就是 build/lib，正好是原生 .so 的输出目录，
 # 撞在一起会把那份 .so 额外带一份到 wheel 根目录，所以这里换到 build/wheel。
@@ -49,9 +57,11 @@ def count(prefix):
 checks = {
     "moz_openscad.py": "moz_openscad.py" in names,
     "moz_drawing.py": "moz_drawing.py" in names,
+    "moz_cadio.py": "moz_cadio.py" in names,
     "类型存根": "moz_openscad.pyi" in names,
     "moz_data/lib/libmozopenscad.so": "moz_data/lib/libmozopenscad.so" in names,
-    "没有多余的顶层 .so": "libmozopenscad.so" not in names,
+    "moz_data/lib/libmozcadio.so": "moz_data/lib/libmozcadio.so" in names,
+    "没有多余的顶层 .so": "libmozopenscad.so" not in names and "libmozcadio.so" not in names,
     "配色方案": count("moz_data/color-schemes/render/") > 0,
     "引擎字体": count("moz_data/fonts/Liberation-2.00.1/ttf/") > 0,
     "中文字库": "moz_data/fonts/MozSansSC-Regular.ttf" in names,

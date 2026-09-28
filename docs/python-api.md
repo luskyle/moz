@@ -375,3 +375,44 @@ moz_dxf.report("板框.dxf")                              # 只要报告
 - 命令行演示：`PYTHONPATH=py python3 py/dxf_demo.py 图纸.dxf --height 6 --export-stl out.stl --drawing out.pdf`
   （`--drawing` 会把模型再画回一张 A4 图，即"图纸 ⇄ 模型"闭环）。
 - 语料回归：`PYTHONPATH=py python3 py/verify_dxf.py [额外的.dxf ...]`。
+
+## 17. 查阅别人的图纸（`moz_cadio`，DXF/DWG）
+
+反过来读**别人的**图纸：`moz_cadio`（ctypes 绑 `libmozcadio.so`，即上游 libdxfrw 2.0.0）把 DXF/DWG
+读成"规范化 2D 实体模型"，供渲染器查阅；**DWG 只有这条路**（ezdxf 读不了 DWG）。与 §16 的分工：
+`moz_dxf` 是 DXF 的**建模主路径**（轮廓/成环/参数/成型），`moz_cadio` 是**读出路径**（全部图元 +
+图层/线型/颜色语义）。链路、抽取过程与验收见 [librecad-integration.md](librecad-integration.md)。
+
+```bash
+bash scripts/build_moz_cadio.sh    # 只需 cmake + g++，约 30 秒（不需要 Qt，也不需要几何内核）
+```
+
+```python
+import moz_cadio
+
+cad = moz_cadio.read("板框.dwg")                    # 读不了抛 CadIoError（消息带原因）
+print(cad.format, cad.version, cad.units_name)      # 'dwg' 'AC1027' 'mm'
+print(cad.counts())                                 # {'TEXT': 29, 'LINE': 26, ...}
+for layer in cad.layers:                            # 图层：颜色/线型/开关/冻结/线宽
+    print(layer.name, layer.aci, layer.rgb, layer.lineweight_name, "off" if layer.off else "")
+print(cad.report())                                 # 可读的解析报告（含告警）
+
+model = [e for e in cad.entities if e.owner == ""]  # 模型空间（块内实体的 owner 是块名）
+for e in model[:5]:
+    print(e.kind, e.layer, e.point2d("p1"), e.closed, e.dim_kind)
+```
+
+要点：
+
+- **角度一律弧度**（libdxfrw 里 TEXT 用度、INSERT 用弧度，绑定层已统一）；坐标已按
+  `read(iface, true)` 处理（带 extrusion 的实体换算到平面，与 LibreCAD 一致）；
+- **块定义内容也在 `entities` 里**，用 `owner` 区分（模型空间是空串）；`blocks` 给块名与基点，
+  展开与否由调用方决定；
+- **图元字段按 `kind` 解释**（19 种）：`p1/p2/p3` + `points`/`bulges`/`knots`/`weights` +
+  `radius`/`start_angle`/`ratio`/`height`/`rotation`/`xscale`…；多段线的 bulge、样条的控制点与
+  节点都是**原样**给的（离散我们自己来，口径与 §16 一致）；
+- **DWG 覆盖面 R1.40–2018+**（`AC14`…`AC1032`）；R2.5 之前的古董版本会明确报"没有可用的读取器"；
+- **不静默**：被忽略的内容（LEADER 顶点、IMAGE 路径…）与近似处理（剖面线边界曲线按 16 段采样）
+  都进 `warnings`，并在 `report()` 里列出来；
+- 语料回归：`PYTHONPATH=py python3 py/verify_cadio.py`（当前 **225 个文件：OK=213、EMPTY=10、
+  预期读不通 3、FAIL=0**）。

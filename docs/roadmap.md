@@ -86,6 +86,16 @@
       不合法 SPLINE 静默丢几何 → 明确记入忽略并给原因、小数逗号被修复模式截断凭空造几何 →
       改按"数值不可信"直接拒绝）。多视图推深度（P4）、B-rep 特征与约束求解
       （P2/P3）见 **[2d-to-3d.md](2d-to-3d.md)**。
+- [x] **DXF/DWG 读出（N1）**：抽出 libdxfrw（**上游 2.0.0**，零 Qt、零 zlib）编成
+      `libmozcadio.so`（C ABI `3rd/libdxfrw/moz/moz_cadio.{h,cc}` + `scripts/build_moz_cadio.sh`），
+      ctypes 绑定 `py/moz_cadio.py` 读成"规范化 2D 实体模型"（19 种图元 + 图层/线型/颜色/块/标注语义）；
+      与 ezdxf 在模型空间上逐类对拍一致；真实 DWG 样本 **16 个全通**（R1.40–2018+，
+      `corpus/dwg/README.md`）；语料回归 `py/verify_cadio.py` **225 个文件：OK=213、EMPTY=10、
+      预期读不通 3、FAIL=0**；`.so` 随 wheel 分发并过 smoke test。实用发现：LibreCAD 树里那份
+      libdxfrw 是 0.5.11 时代的拷贝（读不了 AC1018+ 且静默丢实体），所以构建源换成上游 2.0.0。
+      详见 **[librecad-integration.md](librecad-integration.md)**。
+- [ ] **预览器直接查阅图纸（N2）**：`moz-cadview` 命令行 + 图层显隐/颜色/线型/真曲线样条（同文档）。
+- [ ] **DWG 进"图纸 → 模型"（N3）**：`moz_dxf.Drawing` 从规范化实体模型构建，于是 DWG 也能走 P1。
 - [ ] **装配与运动**：间隙、配合、行程。
 - [ ] **自由曲面/NURBS**、**圆角/倒角**（OpenSCAD 无原生倒角）。
 - [ ] **公差与合格判定**（可检验性）。

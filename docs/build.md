@@ -51,6 +51,24 @@ mv -f "$OUT/.libmozopenscad.so.tmp" "$OUT/libmozopenscad.so"
 实测踩过一次：一个跑了 7 分钟的验证进程在库里被覆盖后 `总线错误（核心已转储）`。
 原子替换后，已加载旧库的进程继续用旧 inode，重构建不会打断它。
 
+### 第二个共享库：`libmozcadio.so`（DXF/DWG 读取）
+
+```bash
+bash scripts/build_moz_cadio.sh    # 只需 cmake + g++，首次约 30 秒
+```
+
+它把 **上游 libdxfrw 2.0.0**（vendored 在 `3rd/libdxfrw/src`，36 个 `.cpp`，**纯 C++，不需要
+Qt、不需要 zlib**）和我们自己的 C ABI driver（`3rd/libdxfrw/moz/moz_cadio.cc`）编成一个共享库，
+产物 `build/lib/libmozcadio.so`；Python 侧由 `py/moz_cadio.py`（ctypes）调用。
+
+- 目标与源清单在 `3rd/libdxfrw/moz/CMakeLists.txt`（与上游自己的 `libdxfrw_sources.cmake`
+  是同一份文件清单）；**不用** LibreCAD 树里那份 0.5.11 时代的拷贝（它读不了 AC1018+，
+  见 [third-party.md](third-party.md)）；
+- 构建与依赖**与几何内核完全无关**：内核没构建也能单独构建/使用它；
+- `.so` 搜索顺序：`MOZ_CADIO_LIB` 环境变量 → 模块同目录 → `../build/lib/` → `moz_data/lib/`；
+- 覆盖面与已知边界见 [third-party.md](third-party.md) 与
+  [librecad-integration.md](librecad-integration.md)（DWG **R1.40–2018+**，实测 16 个真实样本全通）。
+
 ## 打包（pip / wheel）
 
 `bash scripts/build_wheel.sh` 打一个**自带全部运行时数据**的平台 wheel（本机上是
@@ -58,8 +76,9 @@ mv -f "$OUT/.libmozopenscad.so.tmp" "$OUT/libmozopenscad.so"
 
 | wheel 里带什么 | 位置 |
 | --- | --- |
-| Python 代码（含类型存根） | `moz_openscad.py` / `moz_viewer.py` / `moz_drawing.py` / `demo.py` / `moz_openscad.pyi` |
+| Python 代码（含类型存根） | `moz_openscad.py` / `moz_viewer.py` / `moz_drawing.py` / `moz_dxf.py` / `moz_cadio.py` / `demo.py` / `moz_openscad.pyi` |
 | 预编译的几何内核 | `moz_data/lib/libmozopenscad.so` |
+| 预编译的 DXF/DWG 解析库 | `moz_data/lib/libmozcadio.so` |
 | 配色方案（`<资源>/color-schemes/render/*.json`） | `moz_data/color-schemes/` |
 | 引擎自带字体（Liberation）+ 自带中文字库 | `moz_data/fonts/` |
 | SCAD 库（`use <MCAD/fonts.scad>`） | `moz_data/libraries/` |
