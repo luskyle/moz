@@ -474,6 +474,21 @@ def _is_within(path, root):
 DRAWING_LIMIT = 500          # 图纸列表一次最多列这么多（很多层级的大目录要有个上限）
 
 
+def _missing_hint(cad, name):
+    """给"找不到块"的原因补一句候选提示（实测 DWG 的匿名块名会与块定义名对不上）。"""
+    if name.startswith("("):                       # "(无名块参照)" 这类已经是说明了
+        return name
+    known = {block.name for block in cad.blocks}
+    known |= {entity.owner for entity in cad.entities if entity.owner}   # 块表 + 实体归属
+    prefix = name.rstrip("0123456789")
+    related = sorted(candidate for candidate in known
+                     if candidate != name and candidate.startswith(prefix))
+    if related:
+        return (f"找不到块定义 {name}；文件里有 {len(related)} 个名字以它开头的块"
+                f"（如 {related[0]}）——DWG 的匿名块名在上游对不上时就是这样")
+    return f"找不到块定义 {name}"
+
+
 def problems_text(cad, counts=None, missing=(), notes=()):
     """当前这张图纸的"问题 / 提示"全文——窗口下方那个面板里显示，不截断。
 
@@ -483,7 +498,7 @@ def problems_text(cad, counts=None, missing=(), notes=()):
              f"格式：{cad.format.upper()} {cad.version}｜单位：{cad.units_name}",
              "画出来的：" + (describe(counts) if counts else "（什么都没有）")]
     if missing:
-        lines += ["", "没画出来的原因："] + [f"  · {item}" for item in missing]
+        lines += ["", "没画出来的原因："] + [f"  · {_missing_hint(cad, item)}" for item in missing]
     if notes:
         lines += ["", "推断出来的："] + [f"  · {item}" for item in notes]
     if cad.warnings:
@@ -1030,7 +1045,8 @@ def scan(targets, limit=DRAWING_LIMIT):
             print(f"[画得出] {path}  {items} 个图元{extra}")
         else:
             blank.append((path, missing, cad.warnings))
-            print(f"[画不出] {path}  原因：{missing[:2] or cad.warnings[:1] or '模型空间里就没有图元'}")
+            why = [_missing_hint(cad, item) for item in missing[:2]]
+            print(f"[画不出] {path}  原因：{why or cad.warnings[:1] or '模型空间里就没有图元'}")
     print()
     print(f"汇总: 共 {len(targets[:limit])} 张 —— 画得出 {len(readable)}、"
           f"画不出东西 {len(blank)}、打不开 {len(broken)}")
@@ -1039,7 +1055,8 @@ def scan(targets, limit=DRAWING_LIMIT):
     for path, error in broken:
         print(f"  打不开：{path}\n          {error}")
     for path, missing, warnings in blank:
-        print(f"  画不出：{path}\n          原因：{missing[:3] or warnings[:1]}")
+        why = [_missing_hint(load(path), item) for item in missing[:3]] if missing else warnings[:1]
+        print(f"  画不出：{path}\n          原因：{why or '模型空间里就没有图元'}")
     return 0
 
 

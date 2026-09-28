@@ -36,6 +36,11 @@ python3 scripts/fetch_dwg_samples.py --dry-run  # 只看会抓什么
 PYTHONPATH=py python3 py/verify_cadio.py        # 连 DXF 语料一起扫一遍
 ```
 
+## 抓取时的完整性校验
+
+`scripts/fetch_dwg_samples.py` 会用 GitHub 树 API 的 `size` 校验每个文件的体积：**不一致就删掉并报失败**，已有文件也会比对（半截的自愈重下）。
+实测踩过：本机网络偶发在 1 MB 左右的文件上超时，`curl` 仍以成功退出，1.1 MB 的样本只落 36 KB ——最后表现为"这张图打不开"，其实文件是半截的。
+
 ## 已知边界
 
 - 三个样本其实是 **AC1032（2018+）**：上游 2.0.0 有 `dwgReader32` 能读；树里那份 0.5.11 不行；

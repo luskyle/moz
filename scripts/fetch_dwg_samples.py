@@ -17,6 +17,7 @@
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -55,7 +56,7 @@ SOURCES = [
 ]
 
 
-def curl(url, target=None, timeout=120, retries=3):
+def curl(url, target=None, timeout=300, retries=3):
     """用 curl 取 url；给了 target 就写文件。返回 (成功?, 内容或错误)。"""
     flags = ["-sSL", "--retry", "2", "--retry-delay", "2", "-m", str(timeout)]
     if target:
@@ -74,6 +75,23 @@ def flatten(path):
     return path.replace("/", "__").replace(" ", "_")
 
 
+def expected_sizes(repo, ref):
+    """走 GitHub 树 API 拿"每个文件应该多大"，用来校验下载有没有被截断。
+
+    实测踩过：本机网络偶发在 1 MB 左右的文件上超时，curl 仍以成功退出，
+    结果是半张图落盘（表现为"这张图打不开"），所以必须有校验。
+    """
+    ok, payload = curl(f"https://api.github.com/repos/{repo}/git/trees/{ref}?recursive=1", timeout=120)
+    if not ok:
+        print(f"  （取不到 {repo} 的文件清单，跳过体积校验）")
+        return {}
+    try:
+        tree = json.loads(payload).get("tree", [])
+    except ValueError:
+        return {}
+    return {item["path"]: item.get("size", 0) for item in tree}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="只列出会抓哪些文件")
@@ -85,13 +103,21 @@ def main(argv=None):
         repo, ref = source["repo"], source["ref"]
         dest_dir = os.path.join(DEST_ROOT, source["dest"])
         print(f"=== {repo}（{source['license']}，{len(source['files'])} 个）===", flush=True)
+        wants = expected_sizes(repo, ref) if not args.dry_run else {}
+        targets_to_redownload = []
         with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
             pending = {}
             for path in source["files"]:
                 target = os.path.join(dest_dir, flatten(path))
                 if os.path.exists(target):
-                    print(f"  已有 {os.path.basename(target)}")
-                    continue
+                    want = wants.get(path, 0)
+                    size = os.path.getsize(target)
+                    if want and size != want:                  # 半截文件：当作没有，重下
+                        print(f"  已有但只 {size} B（应为 {want} B），重下 {os.path.basename(target)}")
+                        targets_to_redownload.append(target)
+                    else:
+                        print(f"  已有 {os.path.basename(target)}")
+                        continue
                 if args.dry_run:
                     print(f"  会抓 {path}")
                     continue
@@ -101,7 +127,15 @@ def main(argv=None):
                 path = pending[future]
                 ok, detail = future.result()
                 if ok:
-                    print(f"  {os.path.basename(detail):58s} {os.path.getsize(detail):8d} B", flush=True)
+                    size = os.path.getsize(detail)
+                    want = wants.get(path, 0)
+                    if want and size != want:                 # 截断/半截文件：删掉并报失败
+                        os.remove(detail)
+                        print(f"  失败 {path}：只下到 {size} B（应为 {want} B），已删除，重跑一次",
+                              flush=True)
+                        failed.append(path)
+                        continue
+                    print(f"  {os.path.basename(detail):58s} {size:8d} B", flush=True)
                     total += 1
                 else:
                     print(f"  失败 {path}：{detail}", flush=True)

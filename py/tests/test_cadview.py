@@ -502,6 +502,20 @@ def test_drawable_count_matches_what_gets_drawn(cadview, qt_app):
     assert cadview.drawable_count(empty) == 0
 
 
+def test_unmatched_block_gets_a_candidate_hint(cadview, qt_app):
+    """找不到块定义时要说清"文件里有没有名字相近的块"（实测 DWG 匿名块名会这样对不上）。"""
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="anon.dwg")
+    cad.layers.append(cadio.Layer(name="0"))
+    cad.entities.append(cadio.Entity(kind="INSERT", layer="0", name="*U"))          # 对不上
+    cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner="*U19",
+                                     p1=(0, 0, 0), p2=(1, 0, 0)))                   # 块定义
+    hint = cadview._missing_hint(cad, "*U")
+    assert "找不到块定义 *U" in hint and "*U19" in hint and "匿名块名" in hint
+    assert cadview._missing_hint(cad, "(无名块参照)") == "(无名块参照)"              # 已经是说明了
+    assert cadview._missing_hint(cad, "别的名字") == "找不到块定义 别的名字"        # 没有相近的就不猜
+
+
 def test_scan_lists_verdicts_with_reasons(cadview, tmp_path, capsys):
     """`--scan` 逐张体检：画得出 / 画不出 / 打不开，并给出原因（不需要 Qt）。"""
     shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "good.dxf")
