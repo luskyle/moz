@@ -628,7 +628,16 @@ class Collector : public DRW_Interface {
   void addLeader(const DRW_Leader *data) override {
     if (!data) return;
     moz_cad_entity &e = begin(MOZ_CAD_LEADER, *data);
-    f.ignore("LEADER（未取顶点）");
+    /* 引线的折点（上游给了 vertexlist，公开字段）——以前整条丢掉，现在按折点画 */
+    std::vector<double> points;
+    for (const auto &v : data->vertexlist) {
+      if (!v) continue;
+      push_point(points, v->x, v->y);
+    }
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.name = f.pool.str(data->style);
+    if (e.npoints == 0) f.ignore("LEADER（没有顶点）");
     finish(e);
   }
 
@@ -671,8 +680,8 @@ class Collector : public DRW_Interface {
     if (!data) return;
     moz_cad_entity &e = begin(MOZ_CAD_IMAGE, *data);
     set_point(e.p1, data->basePoint);
-    set_point(e.p2, data->secPoint);
-    f.ignore("IMAGE（未取图片路径）");
+    set_point(e.p2, data->secPoint);          /* p2 是图片的 u 向量末端：画出来能标出图片位置 */
+    f.ignore("IMAGE（未取图片路径，只画了它的一条边）");
     finish(e);
   }
 

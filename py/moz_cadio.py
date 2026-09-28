@@ -811,6 +811,10 @@ def entity_polylines(entity, chord_tolerance=0.1):
         return []                                   # 无限长：交给渲染层按视图范围裁（viewer 处理）
     if kind in ("SOLID", "TRACE", "3DFACE"):
         return [entity_polygon(entity)]
+    if kind == "LEADER":
+        return [[entity.xy(i) for i in range(len(entity.points) // 2)]]      # 引线折点
+    if kind == "IMAGE":
+        return [[entity.p2d("p1"), entity.p2d("p2")]] if entity.p2d("p2") else []
     if kind == "HATCH":
         return [loop for loop in entity.loop_points() if len(loop) > 1]
     return []
@@ -820,6 +824,20 @@ def entity_polygon(entity):
     """闭合填充图元（SOLID/TRACE/3DFACE）的顶点。"""
     points = [entity.p2d("p1"), entity.p2d("p2"), entity.p2d("p3")]
     return [point for point in points if point is not None]
+
+
+def _dim_block_hint(children):
+    """给"无名标注块"补一句：文件里有多少个没被引用的 *D 块（对不上但能说明情况）。"""
+    referenced = set()
+    for entities in children.values():
+        for entity in entities:
+            if entity.kind in ("INSERT", "DIMENSION") and entity.name:
+                referenced.add(entity.name)
+    candidates = [owner for owner in children
+                  if owner and owner not in referenced and owner.upper().startswith("*D")]
+    if not candidates:
+        return ""
+    return f"：上游没给块名，文件里有 {len(candidates)} 个没被引用的 *D 块"
 
 
 def _note(missing, text):
@@ -879,7 +897,7 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
                         yield from walk(children[sole_block], matrix, depth + 1,
                                         chain + (sole_block,))
                     else:
-                        _note(missing, "(无名标注块)")
+                        _note(missing, "(无名标注块" + _dim_block_hint(children) + ")")
                     continue
                 if depth < max_depth and name not in chain:
                     block = children.get(name)

@@ -489,6 +489,38 @@ def test_problem_panel_explains_a_failure(cadview, qt_app, tmp_path):
     assert "打不开" in QApplication.clipboard().text()
 
 
+def test_leader_and_image_are_drawn(cadview, qt_app):
+    """引线按折点画、图片画出它的一条边（以前两者都被整条忽略、只在告警里提一句）。"""
+    import moz_cadio as cadio
+
+    leader = cadio.Entity(kind="LEADER", layer="0", points=(0.0, 0.0, 10.0, 5.0, 20.0, 0.0))
+    chains = cadio.entity_polylines(leader)
+    assert len(chains) == 1 and chains[0] == [(0.0, 0.0), (10.0, 5.0), (20.0, 0.0)]
+
+    image = cadio.Entity(kind="IMAGE", layer="0", p1=(0, 0, 0), p2=(5, 0, 0))
+    assert cadio.entity_polylines(image)[0] == [(0.0, 0.0), (5.0, 0.0)]
+    assert cadio.entity_polylines(cadio.Entity(kind="IMAGE", layer="0")) == []
+
+    path = DWGS / "acadsharp" / "samples__sample_AC1014.dwg"
+    if path.exists():                                   # 语料里这张既有引线也有图片
+        _cad, _scene, _per, counts, _m = scene_of(cadview, path)
+        assert counts.get("LEADER", 0) >= 1 and counts.get("IMAGE", 0) >= 1
+
+
+def test_unnamed_dimension_explains_the_candidates(cadview, qt_app):
+    """无名标注块要说清"文件里有几个没被引用的 *D 块"（上游没给块名，我们不做猜测式配对）。"""
+    import moz_cadio as cadio
+    cad = cadio.CadFile(path="dims.dwg")
+    cad.layers.append(cadio.Layer(name="0"))
+    cad.entities.append(cadio.Entity(kind="DIMENSION", layer="0"))                 # 无名
+    for index in range(3):                                                        # 3 个候选块
+        cad.entities.append(cadio.Entity(kind="LINE", layer="0", owner=f"*D{index + 3}",
+                                         p1=(0, 0, 0), p2=(1, 0, 0)))
+    missing = []
+    assert list(cadio.iter_draw(cad, missing=missing)) == []
+    assert missing and "*D 块" in missing[0] and "3 个" in missing[0]
+
+
 def test_drawable_count_matches_what_gets_drawn(cadview, qt_app):
     """`drawable_count()` 的判据要跟真正画出来的东西一致（空图返回 0）。"""
     for name in ("plate", "bracket", "messy"):
