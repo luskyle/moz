@@ -432,6 +432,7 @@ PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report       # 只打印解
 PYTHONPATH=py python3 py/moz_cadview.py 图纸目录/ --report       # 目录：逐个打印报告
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --layers       # 图层 + 每层图元数
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --stats        # 画了多少 item（无窗口，CI 用）
+PYTHONPATH=py python3 py/moz_cadview.py 图纸目录/ --scan           # 逐张体检：画得出/画不出/打不开 + 原因
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png --export-svg out.svg
 ```
 
@@ -463,6 +464,8 @@ print(moz_cadview.list_drawings("图纸目录", recursive=True))        # 目录
 - **没画出来的东西会报出来**（`missing` / `notes`）：块参照找不到块定义（实测 DWG 里匿名块名被
   上游截断 `*U19` → `*U`）、块名本身就是空的参照——都不静默画空；块名为空而文件里**只有一个块**
   时按那个块画（实测 `large_radial.dwg` 就这样，否则整张白板），并记进 `notes`；
+- **窗口下方有「问题（当前图纸）」面板**：给的是**全文**（状态栏那行会被截断）——计数、没画出来的原因、
+  推断、读取告警；打不开时也给原因与常见原因清单，还有「复制这些问题」按钮（好贴出来）；
 - **整张画不出东西时**：画面中央写清原因（「没有可绘制的图元」+ 原因），不是白板；
   打开目录时也会在前几张里挑一张**画得出来**的（`first_drawable()`），不总是取排在最前那张；
 - 线型是**视觉近似**（真实定义在 LTYPE 表里，没解析）；ACI 颜色用色轮算法（非逐项抄表）；

@@ -459,6 +459,64 @@ def test_first_drawable_skips_an_empty_first_entry(cadview, monkeypatch, tmp_pat
     assert Path(view.cad.path).name == "b_good.dxf"
 
 
+def test_problem_panel_shows_the_whole_story(cadview, qt_app):
+    """下方「问题」面板给**全文**（状态栏那行会被截断）：计数、没画出来的原因、读取告警。"""
+    view = cadview.CadView(cadview.load(str(DRAWINGS / "bracket.dxf")))
+    view.warn_on_error = False
+    text = view.report.toPlainText()
+    assert "文件：" in text and "画出来的：" in text
+    assert "没有告警：这张图读得干净。" in text
+
+    dwg = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if dwg.exists():
+        view.open_path(str(dwg))
+        text = view.report.toPlainText()
+        assert "没画出来的原因" in text and "读取时的告警" in text
+        assert len(text) > len(view.window.statusBar().currentMessage())   # 面板比状态栏详细
+
+
+def test_problem_panel_explains_a_failure(cadview, qt_app, tmp_path):
+    """打不开时面板给出原因与常见原因清单（不再只有一行截断的 label）。"""
+    from PySide6.QtWidgets import QApplication
+
+    view = cadview.CadView(cadview.load(str(DRAWINGS / "plate.dxf")))
+    view.warn_on_error = False
+    assert view.open_path(str(tmp_path / "nope.dwg")) is False
+    text = view.report.toPlainText()
+    assert "打不开" in text and "常见原因" in text and "R2.5" in text
+
+    view.copy_report()                                   # 一键复制（好贴出来）
+    assert "打不开" in QApplication.clipboard().text()
+
+
+def test_drawable_count_matches_what_gets_drawn(cadview, qt_app):
+    """`drawable_count()` 的判据要跟真正画出来的东西一致（空图返回 0）。"""
+    for name in ("plate", "bracket", "messy"):
+        assert cadview.drawable_count(cadview.load(str(DRAWINGS / f"{name}.dxf"))) > 0
+
+    import moz_cadio as cadio
+    empty = cadio.CadFile(path="empty.dxf")
+    empty.layers.append(cadio.Layer(name="0"))
+    empty.entities.append(cadio.Entity(kind="HATCH", layer="0"))       # 没有边界环
+    empty.entities.append(cadio.Entity(kind="LWPOLYLINE", layer="0"))  # 没有顶点
+    assert cadview.drawable_count(empty) == 0
+
+
+def test_scan_lists_verdicts_with_reasons(cadview, tmp_path, capsys):
+    """`--scan` 逐张体检：画得出 / 画不出 / 打不开，并给出原因（不需要 Qt）。"""
+    shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "good.dxf")
+    (tmp_path / "broken.dxf").write_text("这不是图纸\n", encoding="utf-8")
+    blank = DWGS / "acadsharp" / "samples__geolocation__geoloc.dwg"
+    if blank.exists():
+        shutil.copy(blank, tmp_path / "blank.dwg")
+
+    assert cadview.main([str(tmp_path), "--scan"]) == 0
+    out = capsys.readouterr().out
+    assert "[画得出]" in out and "good.dxf" in out
+    assert "[打不开]" in out and "broken.dxf" in out
+    assert "汇总:" in out and "画得出" in out
+
+
 def test_demo_lists_samples_reports_and_headless(cadview, monkeypatch, capsys, tmp_path):
     demo = pytest.importorskip("cadview_demo")
 

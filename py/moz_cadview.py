@@ -474,6 +474,39 @@ def _is_within(path, root):
 DRAWING_LIMIT = 500          # 图纸列表一次最多列这么多（很多层级的大目录要有个上限）
 
 
+def problems_text(cad, counts=None, missing=(), notes=()):
+    """当前这张图纸的"问题 / 提示"全文——窗口下方那个面板里显示，不截断。
+
+    状态栏只放一行摘要（会被截断），全文在这里：读到的告警、没画出来的原因、推断说明。
+    """
+    lines = [f"文件：{cad.path}",
+             f"格式：{cad.format.upper()} {cad.version}｜单位：{cad.units_name}",
+             "画出来的：" + (describe(counts) if counts else "（什么都没有）")]
+    if missing:
+        lines += ["", "没画出来的原因："] + [f"  · {item}" for item in missing]
+    if notes:
+        lines += ["", "推断出来的："] + [f"  · {item}" for item in notes]
+    if cad.warnings:
+        lines += ["", f"读取时的告警（{len(cad.warnings)} 条）："] + [f"  · {text}" for text in cad.warnings]
+    if not (missing or notes or cad.warnings):
+        lines += ["", "没有告警：这张图读得干净。"]
+    return "\n".join(lines)
+
+
+def failure_text(path, error):
+    """打开失败时的全文说明（比状态栏那一行详细得多）。"""
+    return "\n".join([
+        f"文件：{path}", "", "打不开：", f"  {error}", "",
+        "常见原因：",
+        "  · R2.5 及更早的 DWG：上游 libdxfrw 没有对应读取器（报错里会写明）",
+        "  · 文件损坏、部分加密，或用了上游没实现的 DWG 特性（DWG 支持是「尽力而为」）",
+        "  · 扩展名是 .dwg/.dxf 而内容其实是别的格式（改对扩展名再试）",
+        "  · DXF 连 ezdxf 兜底也失败（消息里会同时给出两种原因）",
+        "",
+        "想批量看目录里哪些文件有问题：moz-cadview <目录> --scan",
+    ])
+
+
 def first_drawable(entries, probe=5):
     """从前面几张里挑一张**画得出来**的（实测语料里真有整张画不出东西的），都不行就用第一张。
 
@@ -562,7 +595,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
     def __init__(self, cad, dark=True, title=None, directory=None, recursive=False):
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QAction, QKeySequence, QPainter
-        from PySide6.QtWidgets import QGraphicsView, QListWidget
+        from PySide6.QtWidgets import QGraphicsView, QListWidget, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
         self.dark = dark
         self.directory = None
@@ -600,13 +633,29 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         reset.triggered.connect(self.fit)
         views.addAction(reset)
 
+        report = QPlainTextEdit()
+        report.setReadOnly(True)
+        report.setLineWrapMode(QPlainTextEdit.NoWrap)
+        report.setPlaceholderText("这里显示当前图纸遇到的问题（打开失败、没画出来的原因、读取告警）")
+        copy_button = QPushButton("复制这些问题")
+        copy_button.clicked.connect(self.copy_report)
+        report_panel = QWidget()
+        report_layout = QVBoxLayout(report_panel)
+        report_layout.setContentsMargins(4, 4, 4, 4)
+        report_layout.addWidget(report, 1)
+        report_layout.addWidget(copy_button)
+
         window.resize(1200, 800)
         window.addDockWidget(Qt.RightDockWidgetArea, _dock(window, "图纸", drawings, 300))
         window.addDockWidget(Qt.RightDockWidgetArea, _dock(window, "图层", layers))
+        self.report_dock = _dock(window, "问题（当前图纸）", report_panel, 420)
+        window.addDockWidget(Qt.BottomDockWidgetArea, self.report_dock)
+        views.addAction(self.report_dock.toggleViewAction())       # 视图菜单里可开关
         self.window = window
         self.view = view
         self.drawings = drawings
         self.layers = layers
+        self.report = report
         self.cad = cad
         self.scene = None
         self.per_layer = {}
@@ -648,6 +697,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
             summary += f"；{notes[0]}"
         self.window.statusBar().showMessage(
             f"{cad.format.upper()} {cad.version}｜{summary}｜滚轮缩放、左键拖动、Ctrl+O 打开")
+        self.set_report(problems_text(cad, counts, missing, notes))
         self.fit()
 
     def set_directory(self, directory, recursive=False, limit=DRAWING_LIMIT):
@@ -719,6 +769,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
             self._build(load(path))
         except moz_cadio.CadIoError as exc:
             self.window.statusBar().showMessage(f"打不开 {path}：{exc}")
+            self.set_report(failure_text(path, exc))
             if self.warn_on_error:
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self.window, "打不开", str(exc))
@@ -760,6 +811,16 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         directory = QFileDialog.getExistingDirectory(self.window, "打开图纸目录", start)
         if directory:
             self.open_directory(directory)
+
+    def set_report(self, text):
+        """把"问题"全文放进下方面板（不截断；状态栏只留一行摘要）。"""
+        self.report.setPlainText(text)
+
+    def copy_report(self):
+        """一键复制这些问题（好贴给别人/贴到 issue 里）。"""
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(self.report.toPlainText())
+        self.window.statusBar().showMessage("已复制问题清单到剪贴板")
 
     def fit(self):
         from PySide6.QtCore import Qt
@@ -859,6 +920,8 @@ def main(argv=None):
     parser.add_argument("--layers", action="store_true", help="只列出图层与每层图元数")
     parser.add_argument("--stats", action="store_true",
                         help="打印画了多少 item（无窗口，CI 用）")
+    parser.add_argument("--scan", action="store_true",
+                        help="逐张体检：读得通 / 画不出东西 / 打不开，并列出原因（无窗口，排查用）")
     parser.add_argument("--export-png", metavar="PATH", help="导出 PNG（无窗口）")
     parser.add_argument("--export-svg", metavar="PATH", help="导出 SVG（无窗口）")
     parser.add_argument("--width", type=int, default=1600, help="导出宽度（默认 1600）")
@@ -872,6 +935,8 @@ def main(argv=None):
         if not entries:
             print(f"这个目录里没有 DXF/DWG：{directory}", file=sys.stderr)
             return 2
+        if args.scan:
+            return scan(targets=entries)
         if args.report:                      # 目录 + --report：逐个打印（上限 200 张）
             for path in entries[:200]:
                 try:
@@ -884,6 +949,9 @@ def main(argv=None):
             return 0
         args.path = first_drawable(entries)
         print(f"目录里有 {len(entries)} 张图纸，先看：{os.path.basename(args.path)}")
+
+    if args.scan:
+        return scan([args.path])
 
     try:
         cad = load(args.path)
@@ -928,6 +996,51 @@ def main(argv=None):
     else:
         print(f"{cad.report()}\n\n画到场景里的 item：{describe(view.counts)}")
     return application.exec()
+
+
+def drawable_count(cad, missing=None, notes=None):
+    """"画得出来"的图元数——判据与 :func:`build_scene` 一致（画不出东西的实体不算）。"""
+    total = 0
+    for entity, _matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
+        if entity.kind in ("TEXT", "MTEXT"):
+            total += 1 if (entity.text or "").strip() else 0
+        elif entity.kind == "POINT":
+            total += 1 if entity.p1 else 0
+        elif any(len(chain) >= 2 for chain in moz_cadio.entity_polylines(entity)):
+            total += 1
+    return total
+
+
+def scan(targets, limit=DRAWING_LIMIT):
+    """逐张体检：画得出来 / 画不出东西 / 打不开，并列出原因。**不需要 Qt**，适合排查。"""
+    readable, blank, broken = [], [], []
+    for path in targets[:limit]:
+        try:
+            cad = load(path)
+        except moz_cadio.CadIoError as exc:
+            broken.append((path, str(exc)))
+            print(f"[打不开] {path}\n         {str(exc)[:120]}")
+            continue
+        missing, notes = [], []
+        items = drawable_count(cad, missing=missing, notes=notes)
+        if items:
+            readable.append((path, items))
+            extra = f"｜缺块定义 {missing[:2]}" if missing else ""
+            extra += f"｜{notes[0][:30]}" if notes else ""
+            print(f"[画得出] {path}  {items} 个图元{extra}")
+        else:
+            blank.append((path, missing, cad.warnings))
+            print(f"[画不出] {path}  原因：{missing[:2] or cad.warnings[:1] or '模型空间里就没有图元'}")
+    print()
+    print(f"汇总: 共 {len(targets[:limit])} 张 —— 画得出 {len(readable)}、"
+          f"画不出东西 {len(blank)}、打不开 {len(broken)}")
+    if len(targets) > limit:
+        print(f"（只查了前 {limit} 张）")
+    for path, error in broken:
+        print(f"  打不开：{path}\n          {error}")
+    for path, missing, warnings in blank:
+        print(f"  画不出：{path}\n          原因：{missing[:3] or warnings[:1]}")
+    return 0
 
 
 def _missing_note(missing):
