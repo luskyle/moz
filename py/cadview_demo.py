@@ -1,7 +1,7 @@
 """示例：方便地打开 DXF/DWG 看图纸（`moz-cadview` 的"随手可用"版本）。
 
 ```bash
-PYTHONPATH=py python3 py/cadview_demo.py                  # 当前目录有图纸就直接开到"图纸列表"
+PYTHONPATH=py python3 py/cadview_demo.py                  # 启动时弹选择框：选择文件 / 选择目录
 PYTHONPATH=py python3 py/cadview_demo.py 你的图.dwg        # 直接开（也可以把图纸拖进窗口）
 PYTHONPATH=py python3 py/cadview_demo.py 图纸目录/          # 打开目录：里面每张都能点着切换
 PYTHONPATH=py python3 py/cadview_demo.py --samples         # 列出随包样例图纸（无窗口）
@@ -51,7 +51,8 @@ def start_dir():
     return sample_dir() if os.path.isdir(sample_dir()) else here
 
 
-def print_samples(stream=sys.stdout):
+def print_samples(stream=None):
+    stream = sys.stdout if stream is None else stream          # 运行期取，才能被测试捕获
     entries = samples()
     if not entries:
         print("（没找到随包样例图纸）", file=stream)
@@ -63,14 +64,45 @@ def print_samples(stream=sys.stdout):
     print("\n用法：PYTHONPATH=py python3 py/cadview_demo.py <图纸.dxf|dwg>", file=stream)
 
 
-def open_dialog_and_show(application):
-    """兜底：弹"打开图纸"对话框（起始目录见 start_dir）。"""
+def ask_choice():
+    """启动时的选择框：**两个按钮** —— 选择文件 / 选择目录（外加取消）。
+
+    返回 ``"file"`` / ``"directory"`` / ``None``（取消或直接关掉）。
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox()
+    box.setWindowTitle("打开图纸")
+    box.setText("要看 DXF/DWG：选一个文件，或选一个装着图纸的目录")
+    box.setInformativeText("选目录的话，里面的图纸（含子目录）会列在右侧「图纸」面板里，点一下就切换。")
+    # 两个动作按钮用同一种 role，Qt 才会把它们排在一起（否则"取消"会插到中间）
+    file_button = box.addButton("选择文件…", QMessageBox.AcceptRole)
+    directory_button = box.addButton("选择目录…", QMessageBox.AcceptRole)
+    box.addButton("取消", QMessageBox.RejectRole)
+    box.setDefaultButton(file_button)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is file_button:
+        return "file"
+    if clicked is directory_button:
+        return "directory"
+    return None
+
+
+def choose_and_show(application):
+    """启动流程：两个按钮 → 对应的文件/目录对话框 → 打开。"""
     from PySide6.QtWidgets import QFileDialog
 
-    path, _selected = QFileDialog.getOpenFileName(
-        None, "打开图纸", start_dir(), "图纸 (*.dxf *.DXF *.dwg *.DWG);;所有文件 (*)")
+    choice = ask_choice()
+    if choice == "file":
+        path, _selected = QFileDialog.getOpenFileName(
+            None, "选择图纸", start_dir(), "图纸 (*.dxf *.DXF *.dwg *.DWG);;所有文件 (*)")
+    elif choice == "directory":
+        path = QFileDialog.getExistingDirectory(None, "选择图纸目录", start_dir())
+    else:
+        path = ""
     if not path:
-        print("没选文件。可以直接给路径（图纸或目录），例如：")
+        print("没选。也可以直接把路径给它（图纸或目录），例如：")
         print_samples()
         return 0
     return show(path, application)
@@ -130,10 +162,7 @@ def main(argv=None):
         from PySide6.QtWidgets import QApplication
 
         application = QApplication.instance() or QApplication([sys.argv[0]])
-        # 当前目录里有图纸就直接开成"图纸列表"（最省事的那种），否则弹对话框
-        if moz_cadview.list_drawings(os.getcwd()):
-            return show(os.getcwd(), application)
-        return open_dialog_and_show(application)
+        return choose_and_show(application)
 
     from PySide6.QtWidgets import QApplication
 

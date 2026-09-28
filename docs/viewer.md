@@ -164,7 +164,7 @@ QGraphicsScene 上：
 ```bash
 moz-cadview 图纸目录/                                  # 打开目录：右侧「图纸」列表点着切换
 moz-cadview 图纸.dwg                                   # 打开单张（图纸/目录都能拖进窗口）
-PYTHONPATH=py python3 py/cadview_demo.py               # 随手可用版：当前目录有图纸就直接开
+PYTHONPATH=py python3 py/cadview_demo.py               # 随手可用版：启动弹「选择文件 / 选择目录」
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report        # 只打印解析报告
 PYTHONPATH=py python3 py/moz_cadview.py 图纸目录/ --report        # 目录：逐个打印报告
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --export-png out.png

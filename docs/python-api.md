@@ -425,7 +425,7 @@ for e in model[:5]:
 `moz-cadview`，随手可用的示例是 `py/cadview_demo.py`。
 
 ```bash
-PYTHONPATH=py python3 py/cadview_demo.py                      # 当前目录有图纸就直接开（列表可点着换）
+PYTHONPATH=py python3 py/cadview_demo.py                      # 启动弹选择框：选择文件 / 选择目录
 PYTHONPATH=py python3 py/cadview_demo.py 图纸.dwg              # 开一张（图纸/目录都能拖进窗口）
 PYTHONPATH=py python3 py/cadview_demo.py 图纸目录/              # 打开目录：连子目录一起列出来
 PYTHONPATH=py python3 py/moz_cadview.py 图纸.dxf --report       # 只打印解析报告（无窗口）

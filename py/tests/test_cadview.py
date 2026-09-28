@@ -301,6 +301,32 @@ def test_dropped_path_accepts_drawings_and_directories(cadview, qt_app, tmp_path
     assert cadview._dropped_path(FakeEvent([other])) is None
 
 
+def test_demo_startup_dialog_has_file_and_directory_buttons(cadview, qt_app, monkeypatch):
+    """启动弹窗就是**两个按钮**：选择文件 / 选择目录（外加取消），点谁就走哪条路。"""
+    demo = pytest.importorskip("cadview_demo")
+    from PySide6.QtWidgets import QMessageBox
+
+    seen = {}
+
+    def fake_exec(self):                            # 不真弹窗
+        seen["labels"] = [button.text() for button in self.buttons()]
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+
+    def clicking(label):
+        def clicked(self):
+            return next(button for button in self.buttons() if button.text().startswith(label))
+        return clicked
+
+    monkeypatch.setattr(QMessageBox, "clickedButton", clicking("选择文件"))
+    assert demo.ask_choice() == "file"
+    monkeypatch.setattr(QMessageBox, "clickedButton", clicking("选择目录"))
+    assert demo.ask_choice() == "directory"
+
+    assert seen["labels"] == ["选择文件…", "选择目录…", "取消"]
+
+
 def test_demo_lists_samples_reports_and_headless(cadview, monkeypatch, capsys, tmp_path):
     demo = pytest.importorskip("cadview_demo")
 

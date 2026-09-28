@@ -151,7 +151,7 @@ void          moz_cad_free(moz_cad_file *f);
 | 不静默 | 块参照查不到定义（DWG 匿名块名被上游截断 `*U19`→`*U`）、剖面线没有边界环（MPOLYGON）都会报出来 |
 | 性能 | 2.7 MB / 5260 item 的整图约 **0.31 秒**；16 个真实 DWG 全部画得出来 |
 | 目录与图纸列表 | **打开目录**（`list_drawings()` 递归扫描，上限 500）：右侧「图纸」面板点一下就换；打开单张图则列出同目录的兄弟文件；`Ctrl+O`/`Ctrl+Shift+O`/拖图纸或目录都能开 |
-| 随手可用的示例 | `py/cadview_demo.py`：不给参数时"当前目录有图纸就直接开成图纸列表"，否则弹打开对话框；无显示器时给提示与样例清单 |
+| 随手可用的示例 | `py/cadview_demo.py`：不给参数时弹一个**两个按钮**的选择框（选择文件… / 选择目录…，外加取消），选完就打开；无显示器时给提示与样例清单 |
 | 导出与无窗口模式 | `--export-png` / `--export-svg` / `--report`（给目录则逐个打印）/ `--layers` / `--stats`（无显示器即可跑） |
 | 测试 | `py/tests/test_cadview.py` **19 个用例**（离散数学、颜色/线型、场景装配、块与标注展开、退化输入、大图性能、兜底读取、导出、命令行） |
 | 打包 | wheel 带 `moz_cadview.py` 与 `moz-cadview` 入口；`scripts/smoke_installed.py` 里 offscreen 画过一遍 |

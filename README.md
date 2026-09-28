@@ -104,7 +104,7 @@ PYTHONPATH=py python3 py/verify_examples.py Basics/CSG
 ```bash
 bash scripts/build_moz_cadio.sh              # 只需 cmake + g++，约 30 秒（不需要 Qt）
 
-PYTHONPATH=py python3 py/cadview_demo.py                    # 当前目录有图纸就直接开（右侧列表可点着切换）
+PYTHONPATH=py python3 py/cadview_demo.py                    # 启动弹选择框：选择文件 / 选择目录
 PYTHONPATH=py python3 py/cadview_demo.py 你的图.dwg          # 开一张；图纸或整个目录都能拖进窗口
 PYTHONPATH=py python3 py/cadview_demo.py 图纸目录/            # 打开目录：里面每张点一下就换
 PYTHONPATH=py python3 py/cadview_demo.py 图.dxf --report     # 只看解析报告（无窗口）
