@@ -131,6 +131,28 @@ def resolve_colour(entity, layer, aci_table):
     return aci_table.rgb(index)
 
 
+def text_pose_matrix(matrix, rotation_deg):
+    r"""文本在世界坐标里的姿态矩阵 ``(m00, m01, m10, m11)``，Qt 与 Webview 渲染直接可用。
+
+    文本局部坐标 y **向下**（QGraphicsSimpleTextItem / canvas 的习惯），要先翻到世界
+    y 向上（Flip），再按实体自身的 \`rotation\` 旋转，最后乘块的线性部分——缩放、
+    旋转，以及 **INSERT 负比例带来的镜像**。只取旋转角（``atan2``）会把镜像块里的
+    文字画成 180° 倒字而不是翻面（实测镜像块的表格文字整行反了）。
+
+    返回的 4 分量按 QMatrix 习惯排（x' = m00·x + m01·y，y' = m10·x + m11·y），
+    可直接喂 ``QTransform(m00, m10, m01, m11, 0, 0)`` 或 ``ctx.transform(m00, m10,
+    m01, m11, 0, 0)``。
+    """
+    theta = math.radians(rotation_deg)
+    a, b, _c, d, e, _f = matrix
+    rotated = moz_cadio.matrix_multiply(
+        (a, b, 0.0, d, e, 0.0),
+        (math.cos(theta), -math.sin(theta), 0.0,
+         math.sin(theta), math.cos(theta), 0.0))
+    flipped = moz_cadio.matrix_multiply(rotated, (1.0, 0.0, 0.0, 0.0, -1.0, 0.0))
+    return flipped[0], flipped[1], flipped[3], flipped[4]
+
+
 def model_as_json(cad, dark=False):
     """把规范化模型摊平成 Webview **可交互**的 JSON（图元折线 + 文字，颜色按主题算好）。
 
@@ -168,7 +190,10 @@ def model_as_json(cad, dark=False):
                 position = moz_cadio.matrix_apply(matrix, entity.p1)
                 turn = math.atan2(matrix[3], matrix[0])   # 块变换带来的旋转
                 item.update({"text": text, "pos": [position[0], position[1]],
-                             "h": entity.height or 2.5, "rot": entity.rotation + turn})
+                             "h": entity.height or 2.5,
+                             "rot": entity.rotation + turn,
+                             # 姿态矩阵：旋转+缩放+镜像都是它的（webview 画文字用它）。
+                             "pose": list(text_pose_matrix(matrix, entity.rotation))})
         flat: list[float] = []
         for chain in moz_cadio.entity_polylines(entity):
             for x, y in chain:
@@ -419,21 +444,23 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         return pen
 
     def text_item(entity, matrix):
-        """文字项（TEXT/MTEXT/MLEADER 共用）：位置按变换走，字高按像素给（视图 Y 翻转要翻回来）。"""
+        """文字项（TEXT/MTEXT/MLEADER 共用）：位置按变换走，姿态用**完整块矩阵**。
+
+        镜像 INSERT（比例负值）里的文字要翻面显示——姿态矩阵带上镜像（而不是只
+        转一个角度，那会把镜像文字画成 180° 倒字）。字高按像素给（视图 Y 翻转除外）。
+        """
         text = mtext_to_display(entity.text or "").split("\n")[0]
         if not text or not entity.p1:
             return None
         position = moz_cadio.matrix_apply(matrix, entity.p1)
-        scale = math.hypot(matrix[0], matrix[3]) or 1.0
-        turn = math.atan2(matrix[3], matrix[0])        # 块变换带来的旋转
+        m00, m01, m10, m11 = text_pose_matrix(matrix, entity.rotation)
         item = QGraphicsSimpleTextItem(text)
         font = QFont()
         font.setPixelSize(max(1, int(round(entity.height or 2.5))))
         item.setFont(font)
         item.setBrush(QBrush(colour_for(entity)))
         item.setPos(QPointF(position[0], position[1]))
-        item.setRotation(-math.degrees(entity.rotation + turn))
-        item.setTransform(QTransform().scale(scale, -scale), True)
+        item.setTransform(QTransform(m00, m10, m01, m11, 0.0, 0.0))
         return item
 
     def add(item, entity, *, to_scene=True):

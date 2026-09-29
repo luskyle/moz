@@ -140,7 +140,13 @@
   function drawText(item) {
     ctx.save();
     ctx.translate(item.pos[0], item.pos[1]);
-    ctx.rotate(item.rot || 0);
+    if (item.pose) {
+      // 姿态矩阵（旋转+缩放+块镜像都在里面，[m00, m01, m10, m11]，QMatrix 顺序）。
+      // 镜像 INSERT 的文字必须翻面画——只 rotate 会把镜像文字画成 180° 倒字。
+      ctx.transform(item.pose[0], item.pose[2], item.pose[1], item.pose[3], 0, 0);
+    } else {
+      ctx.rotate(item.rot || 0);
+    }
     ctx.font = Math.max(item.h || 2.5, 1 / state.scale) + 'px sans-serif';
     ctx.fillStyle = item.color;
     ctx.textAlign = 'center';

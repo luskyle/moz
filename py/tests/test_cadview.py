@@ -197,6 +197,53 @@ def test_model_as_json_dark_scheme_flips_black_to_white(cadview):
         f"翻白之外的颜色必须保持浅色方案的原色：{non_black_light} vs {non_black_dark}"
 
 
+# --- 文字姿态：块的镜像必须进文字（Qt 与 webview 同源，旧实现只转角度画成倒字） ---
+
+
+def test_text_pose_matrix_keeps_block_mirror_out_of_rotation(cadview):
+    """块的**镜像**（INSERT 负比例）必须进文字姿态矩阵，而不是折成旋转角。
+
+    pose = Flip(文本 y 向下→y 向上) · R(实体 rotation) · 块线性部。无镜像时与旧的
+    scale(1,-1)+rotate 写法矩阵一致；镜像块与旋转 180° 块的 pose **不同**（m11 符号），
+    所以屏幕上一个左右翻、一个倒置（旧实现只认角度，镜像被画成 180° 倒字）。
+    """
+    identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    assert cadview.text_pose_matrix(identity, 0.0) == (1.0, 0.0, 0.0, -1.0)   # 仅 Flip
+    assert cadview.text_pose_matrix(identity, 90.0) == pytest.approx(
+        (0.0, 1.0, 1.0, 0.0), abs=1e-9)                                        # 旋转 90°+Flip
+
+    mirrored = cadview.text_pose_matrix((-1.0, 0.0, 0.0, 0.0, 1.0, 0.0), 0.0)   # xscale=-1
+    turned180 = cadview.text_pose_matrix((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0), 0.0)  # 旋转 180°
+    assert mirrored[0] == pytest.approx(-1.0) and mirrored[3] == pytest.approx(-1.0)
+    assert turned180[0] == pytest.approx(-1.0) and turned180[3] == pytest.approx(1.0)
+    assert mirrored != turned180, "镜像与旋转 180° 的 pose 必须区分开（翻面 vs 倒置）"
+
+
+def test_mirrored_insert_renders_mirrored_text(qt_app, tmp_path):
+    """INSERT 负比例（镜像块）里的 TEXT 要**翻面**渲染，文字姿态带上镜像。
+
+    实际链路：dxfrw 读 41=-1 → insert_matrix 保留负比例 → text_item 把完整姿态
+    矩阵交给 item——不是只转一个角度（那样镜像文字会变成 180° 倒字）。
+    """
+    import moz_cadview as cadview
+
+    dxf = tmp_path / "mirror.dxf"
+    dxf.write_text(
+        "0\nSECTION\n2\nBLOCKS\n"
+        "0\nBLOCK\n8\n0\n2\nB\n70\n0\n10\n0.\n20\n0.\n"
+        "0\nTEXT\n8\n0\n10\n0.\n20\n0.\n40\n1.\n1\nMIRROR\n"
+        "0\nENDBLK\n0\nENDSEC\n"
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nINSERT\n8\n0\n2\nB\n41\n-1.\n42\n1.\n10\n0.\n20\n0.\n"
+        "0\nENDSEC\n0\nEOF\n", encoding="utf-8")
+    scene, _per, counts, missing, _notes = cadview.build_scene(cadview.load(str(dxf)))
+    assert counts.get("TEXT") == 1 and not missing
+    item = next(item for item in scene.items() if hasattr(item, "text"))
+    transform = item.transform()
+    assert transform.m11() < 0 and transform.m22() < 0, \
+        f"镜像块文字的姿态应为 diag(-1,-1)（实际 m11={transform.m11()} m22={transform.m22()}）"
+
+
 # --- 场景装配 ---
 
 

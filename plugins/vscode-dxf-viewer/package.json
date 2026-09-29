@@ -73,7 +73,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "bundle-backend": "bash scripts/bundle-backend.sh",
-    "package": "npm run bundle-backend && vsce package --no-dependencies"
+    "package": "rm -f *.vsix && npm run bundle-backend && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20",
