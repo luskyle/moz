@@ -38,6 +38,9 @@ constexpr int kHatchParts = 16;
 /* 螺旋（HELIX）每圈采 48 段，总段数封顶（避免圈数很大时点数爆炸） */
 constexpr int kHelixPartsPerTurn = 48;
 constexpr int kHelixMaxParts = 2048;
+/* 剖面线边界的样条段采样段数上限（段数 = max(16, 8×控制点数)，与 py/moz_cadio.py 的
+   spline_points 口径一致） */
+constexpr int kSplineMaxParts = 2048;
 
 /* DRW::Version → "AC1015" 这样的串（Python 侧要用它判断 DWG 覆盖面） */
 std::string version_name(DRW::Version v) {
@@ -214,9 +217,98 @@ void sample_bulge(std::vector<double> &out, double x1, double y1, double x2, dou
   }
 }
 
+/* 样条边界（剖面线环里）：有理 de Boor 求值采样成折线
+   ——与 SPLINE 实体的采样同一个算法（py/moz_cadio.py 的 spline_points/_de_boor），
+   保证"样条实体"和"剖面线边界里的样条"两条路径画出来同一条曲线。
+   节点向量不合法时退回控制多边形（跟 Python 侧一致）。 */
+void sample_spline_boundary(const DRW_Spline &spline, std::vector<double> &out) {
+  const size_t count = spline.controllist.size();
+  if (count == 0) {
+    /* 只有拟合点（实测有这种图）：拟合点就在曲线上，直接连 */
+    for (const auto &p : spline.fitlist) {
+      if (p) push_point(out, p->x, p->y);
+    }
+    return;
+  }
+  if (count < 2) {
+    if (spline.controllist[0]) push_point(out, spline.controllist[0]->x,
+                                          spline.controllist[0]->y);
+    return;
+  }
+  int degree = spline.degree;
+  if (degree < 1) degree = 3;
+  if (degree > static_cast<int>(count) - 1) degree = static_cast<int>(count) - 1;
+  const std::vector<double> &knots = spline.knotslist;
+  const bool rational = (spline.flags & 4) && spline.weightlist.size() == count;
+  if (knots.size() != count + static_cast<size_t>(degree) + 1) {
+    for (const auto &p : spline.controllist) {
+      if (p) push_point(out, p->x, p->y);
+    }
+    return;                                 /* 节点数不合法：控制多边形 */
+  }
+  const double low = knots[degree];
+  const double high = knots[count];
+  if (!(high > low)) {
+    for (const auto &p : spline.controllist) {
+      if (p) push_point(out, p->x, p->y);
+    }
+    return;
+  }
+  int parts = std::max(16, 8 * static_cast<int>(count));
+  if (parts > kSplineMaxParts) parts = kSplineMaxParts;
+  /* 齐次坐标 (w*x, w*y, w)，非有理时 w=1 */
+  std::vector<double> homo;
+  homo.reserve(count * 3);
+  for (size_t i = 0; i < count; ++i) {
+    const double x = spline.controllist[i] ? spline.controllist[i]->x : 0.0;
+    const double y = spline.controllist[i] ? spline.controllist[i]->y : 0.0;
+    const double w = rational ? spline.weightlist[i] : 1.0;
+    homo.push_back(w * x);
+    homo.push_back(w * y);
+    homo.push_back(w);
+  }
+  for (int i = 0; i <= parts; ++i) {
+    const double u = low + (high - low) * static_cast<double>(i) / parts;
+    int index = degree;                              /* 找 u 所在节点区间 */
+    if (u >= knots[count]) {
+      index = static_cast<int>(count) - 1;
+    } else if (u > knots[degree]) {
+      while (index < static_cast<int>(count) - 1 && u >= knots[index + 1]) ++index;
+    }
+    /* de Boor：先对控制点做凸组合，最后投影 */
+    std::vector<double> work((static_cast<size_t>(degree) + 1) * 3);
+    for (int k = 0; k <= degree; ++k) {
+      const size_t j = static_cast<size_t>(index - degree + k);
+      work[3 * k] = homo[3 * j];
+      work[3 * k + 1] = homo[3 * j + 1];
+      work[3 * k + 2] = homo[3 * j + 2];
+    }
+    for (int level = 1; level <= degree; ++level) {
+      for (int k = degree; k >= level; --k) {
+        const size_t j = static_cast<size_t>(index - degree + k);
+        const double denominator =
+            knots[j + static_cast<size_t>(degree) - level + 1] - knots[j];
+        const double alpha = (denominator == 0.0) ? 0.0 : (u - knots[j]) / denominator;
+        for (int axis = 0; axis < 3; ++axis) {
+          work[3 * k + axis] = (1.0 - alpha) * work[3 * (k - 1) + axis]
+                               + alpha * work[3 * k + axis];
+        }
+      }
+    }
+    double x = work[3 * degree];
+    double y = work[3 * degree + 1];
+    const double w = work[3 * degree + 2];
+    if (w != 0.0) {
+      x /= w;
+      y /= w;
+    }
+    push_point(out, x, y);
+  }
+}
+
 /* 剖面线：把各边界环摊平成点表 + 环的前缀和下标 */
 void flatten_hatch(const DRW_Hatch &data, std::vector<double> &points, std::vector<int> &offsets,
-                   int *curves, int *splines) {
+                   int *curves) {
   for (const auto &loop : data.looplist) {
     if (!loop) continue;
     for (const auto &sub : loop->objlist) {
@@ -257,9 +349,12 @@ void flatten_hatch(const DRW_Hatch &data, std::vector<double> &points, std::vect
           }
           break;
         }
-        case DRW::SPLINE:
-          if (splines) *splines += 1;
+        case DRW::SPLINE: {
+          const auto *spline = static_cast<const DRW_Spline *>(sub.get());
+          sample_spline_boundary(*spline, points);
+          if (curves) *curves += 1;
           break;
+        }
         default:
           break;
       }
@@ -843,15 +938,14 @@ class Collector : public DRW_Interface {
     if (data->solid) e.flags |= MOZ_CAD_FLAG_SOLID;
     std::vector<double> points;
     std::vector<int> offsets;
-    int curves = 0, splines = 0;
-    flatten_hatch(*data, points, offsets, &curves, &splines);
+    int curves = 0;
+    flatten_hatch(*data, points, offsets, &curves);
     /* 采样/跳过是"仅为显示"的说明，不应该每个剖面线来一条——一张图几十个剖面线就
-       刷屏了（实测 api-cw750-details.dxf 71 条同声）。合成一行带计数。 */
+       刷屏了（实测 api-cw750-details.dxf 71 条同声）。合成一行带计数。
+       弧/椭圆/多段线 bulge/样条边界都会采样（样条与 SPLINE 实体同一算法）；
+       "没画出来"的事另有自己的告警（如"剖面线没有边界环"）。 */
     if (curves > 0) {
-      f.repeat("剖面线边界含曲线段（已按 16 段采样，仅为显示）");
-    }
-    if (splines > 0) {
-      f.repeat("剖面线边界含样条段（未采样——这部分边界是空的）");
+      f.repeat("剖面线边界含曲线段（已采样近似，仅为显示）");
     }
     e.npoints = static_cast<int>(points.size() / 2);
     e.points = f.pool.arr(points);

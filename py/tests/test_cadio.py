@@ -310,6 +310,64 @@ def test_hatch_curve_warnings_are_aggregated(cadio):
     assert any("个剖面线边界含曲线段" in text for text in cad.warnings)    # 汇成一行带计数了
 
 
+def test_hatch_spline_edges_are_sampled_like_spline_entities(cadio):
+    """剖面线边界里的**样条边**要真正画出来，且与 SPLINE 实体同一条曲线。
+
+    实测 ezdxf 的 `examples_dxf__hatches_2.dxf` 就带一条样条边（DXF 内联边记录：72=4）。
+    以前这段被跳过，环上留一个横跨样条的大缺口；现在用与 `py/moz_cadio.py::spline_points`
+    相同的（有理）de Boor 求值采样——**逐点对照两条路径必须同一条曲线**。
+    """
+    path = CORPUS / "ezdxf" / "examples_dxf__hatches_2.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    vals = [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines()]
+
+    def read_first_spline_edge():
+        start = next(i for i, line in enumerate(vals)
+                     if line == "72" and vals[i + 1] == "4")
+        edge = {}
+        j = start + 2
+        while j < len(vals) and vals[j] not in ("72", "97"):
+            code = vals[j]
+            value = vals[j + 1]
+            try:
+                edge.setdefault(code, []).append(float(value))
+            except ValueError:
+                pass
+            j += 2
+        return edge
+
+    edge = read_first_spline_edge()
+    degree = int(edge["94"][0])
+    knots = tuple(edge["40"])
+    controls = [(x, y) for x, y in zip(edge["10"], edge["20"], strict=True)]
+    assert len(knots) == len(controls) + degree + 1
+
+    expected = cadio.spline_points(cadio.Entity(      # Python 侧同一算法
+        kind="SPLINE", layer="0", degree=degree, flags=0, knots=knots,
+        points=tuple(v for pair in controls for v in pair)))
+    assert len(expected) == max(16, 8 * len(controls)) + 1
+
+    cad = cadio.read(str(path))
+    best = None
+    for hatch in cad.by_kind("HATCH"):
+        for loop in hatch.loop_points():
+            for index in range(0, len(loop) - len(expected) + 1):
+                segment = loop[index:index + len(expected)]
+                delta = (math.dist(segment[0], expected[0])
+                         + math.dist(segment[-1], expected[-1]))
+                if best is None or delta < best[0]:
+                    best = (delta, segment)
+    assert best is not None, "环里应该有这条样条款"
+    _delta, segment = best
+    assert all(math.dist(a, b) < 1e-9 for a, b in zip(segment, expected, strict=True)), \
+        "C++ 侧采样与 Python spline_points 必须同一条曲线"
+    steps = sorted(math.dist(segment[i], segment[i + 1]) for i in range(len(segment) - 1))
+    assert steps[-1] < 5 * steps[len(steps) // 2], "没有横跨样条的大缺口"
+    assert not any("样条段" in text or "空的" in text for text in cad.warnings), \
+        "样条边已经采样了，不该再有'这截是空的'的通知"
+
+
 def test_helix_is_drawn_from_axis_and_turns(cadio, tmp_path):
     """HELIX（螺旋）：上游给了轴基点/起点/轴向量/半径/圈数，按它采样成折线画出来。
 
