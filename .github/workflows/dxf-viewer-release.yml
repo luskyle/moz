@@ -1,9 +1,10 @@
 name: moz-dxf-viewer Release
 
-on:
+"on":
   push:
     tags:
       - 'vscode-dxf-viewer-v*'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
