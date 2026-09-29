@@ -59,4 +59,9 @@ set(DXFRW_SOURCES
 
 add_library(mozcadio SHARED ${DXFRW_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/moz_cadio.cc)
 target_include_directories(mozcadio PRIVATE ${LIBDXFRW} ${LIBDXFRW}/intern)
-set_target_properties(mozcadio PROPERTIES OUTPUT_NAME cadio_moz)
+set_target_properties(mozcadio PROPERTIES
+  OUTPUT_NAME cadio_moz
+  # Windows/MSVC 的 DLL 不会像 .so/.dylib 那样默认导出符号：moz_cadio.py 用 ctypes
+  # 按名找 moz_cad_* C ABI 函数，不导出会 AttributeError: function not found。
+  # 该属性让 MSVC 生成 .def 导出全部符号（extern "C" 名原样导出）；非 Windows 无副作用。
+  WINDOWS_EXPORT_ALL_SYMBOLS ON)
