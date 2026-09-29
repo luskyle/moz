@@ -56,12 +56,13 @@ jobs:
         run: |
           LIB_PATH="$(pwd)/build/lib/${{ matrix.lib_file }}"
           if [[ "${{ runner.os }}" == 'Windows' ]]; then
-            LIB_PATH="$(cygpath -w "$LIB_PATH")"   # 原生 python 需要 Windows 路径
+            # 原生 python：库路径要是 Windows 路径（正斜杠，反斜杠在 py 字符串里是转义）
+            LIB_PATH="$(cygpath -m "$LIB_PATH")"
           fi
           PYTHONPATH=py MOZ_CADIO_LIB="$LIB_PATH" \
           ${{ matrix.python }} -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
-            --model-json /tmp/model.json
-          ${{ matrix.python }} -c "import json; d=json.load(open('/tmp/model.json')); \
+            --model-json model.json
+          ${{ matrix.python }} -c "import json; d=json.load(open('model.json')); \
             assert d['items'] and d['layers']; print('smoke OK:',
             len(d['layers']), 'layers,', len(d['items']), 'items',
             '(' + '${{ matrix.lib_file }}' + ')')"
