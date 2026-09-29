@@ -93,12 +93,12 @@ moz 仓库（`3rd/libdxfrw`）取得。
   校验 vsix 内含 python/ + .so→用自带后端跑 `--model-json` 冒烟）与
   `dxf-viewer-release.yml`（打 tag `vscode-dxf-viewer-v*` 出 vsix 挂 GitHub Release，
   并自动发 VS Code Marketplace）。
-- **发布到 Marketplace**：按官方指引在 GitHub `Settings → Secrets and variables →
-  Actions` 添加加密机密 **`VSCE_PAT`**（值：Azure DevOps 个人令牌页签发的 VS Code
-  Marketplace PAT，发布者为 `luskyle`）。然后升 `package.json` 的 `version` 并打 tag
-  `vscode-dxf-viewer-vX.Y.Z` 推送即可——`npm run deploy`（package.json 里的脚本，
-  不含 token；token 由 `VSCE_PAT` 环境变量提供）负责发布。没有该 secret 时跳过市场
-  发布，Release 里的 vsix 仍可手动安装。
+- **发布到 Marketplace**：把 VS Code Marketplace PAT（Azure DevOps 个人令牌页签发的
+  令牌，发布者为 `luskyle`）存成 GitHub 加密机密 **`LUSKYLE`**（`Settings → Secrets
+  and variables → Actions`，名字大小写不敏感）。然后升 `package.json` 的 `version`
+  并打 tag `vscode-dxf-viewer-vX.Y.Z` 推送即可——`npm run deploy`（package.json 里的
+  脚本，不含 token；token 由 `VSCE_PAT` 环境变量注入）负责发布。没有该 secret 时
+  跳过市场发布，Release 里的 vsix 仍可手动安装。
 - 后端交互协议：`python -m moz_cadview <图> --model-json out.json [--dark]` 产出图元
   JSON（折线 + 文字，颜色按主题深浅两套）；`model_as_json` 与 Qt 看图器共用同一套
   几何/颜色口径，文字带完整姿态（旋转+缩放+镜像）。

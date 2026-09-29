@@ -53,13 +53,13 @@ jobs:
       # (package.json) contains no token.  The secrets context is NOT allowed
       # inside `if:`, so the token is read into a step env first and its
       # presence is reported via step output; "no token -> skip" is decided on
-      # that output.  Set the encrypted secret VSCE_PAT at Settings -> Secrets
-      # and variables -> Actions (a VS Code Marketplace PAT from the Azure
-      # DevOps tokens page, publisher luskyle).
+      # that output.  The encrypted secret is named LUSKYLE (Settings ->
+      # Secrets and variables -> Actions) and holds a VS Code Marketplace PAT
+      # from the Azure DevOps tokens page (publisher luskyle).
       - name: Detect Marketplace token
         id: has_token
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSCE_PAT: ${{ secrets.LUSKYLE }}
         run: |
           if [ -n "$VSCE_PAT" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
       - name: Publish to VS Code Marketplace
@@ -67,4 +67,4 @@ jobs:
         working-directory: plugins/vscode-dxf-viewer
         run: npm run deploy
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSCE_PAT: ${{ secrets.LUSKYLE }}
