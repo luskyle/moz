@@ -71,6 +71,7 @@ docs/                    文档
 | 图纸 → 模型（解析 DXF、图层语义、轮廓修复、标注取值、挤出成型；P1） | `py/moz_dxf.py`，演示 `py/dxf_demo.py`，回归 `py/verify_dxf.py` |
 | 查阅别人的图纸：**DXF/DWG** 读出（全部图元 + 图层/线型/颜色语义） | `py/moz_cadio.py`（libdxfrw 抽取，DWG 覆盖面 R1.40–2018+），回归 `py/verify_cadio.py` |
 | 直接看图纸（图层开关/颜色/线型/真曲线，可导 PNG/SVG） | `moz-cadview 图纸.dwg` / `py/moz_cadview.py`，测试 `py/tests/test_cadview.py` |
+| 在 **VS Code** 里看图纸 | 插件 `plugins/vscode-dxf-viewer`（`moz-dxf-viewer`，右键图纸 → Moz: 查看 DXF/DWG 图纸，见其 README 与 CI/CD） |
 | 动画帧（逐帧设`$t` 并回调，对应上游 `--animate`）                  | `moz.eval_animation()`                                     |
 | 库搜索路径运行时接口                                                   | `moz.add_library_path()` / `moz.library_paths()`         |
 | 校验「Python 版和原生`.scad` 是不是同一个几何」                      | `py/verify_examples.py`                                    |

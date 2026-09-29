@@ -1,0 +1,72 @@
+{
+  "name": "moz-dxf-viewer",
+  "displayName": "Moz DXF/DWG Viewer",
+  "description": "在 VS Code 里直接查看 DXF/DWG 图纸 —— 复用 moz 仓库的 libdxfrw 渲染后端（真曲线/剖面线/块/标注/图层），Webview 里滚轮缩放、拖动平移。",
+  "version": "0.1.0",
+  "publisher": "luskyle",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": ["dxf", "dwg", "librecad", "libdxfrw", "cad"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mozDxfViewer.show",
+        "title": "Moz: 查看 DXF/DWG 图纸",
+        "icon": "$(preview)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "mozDxfViewer.show",
+          "when": "resourceExtname =~ /\\.(dxf|dwg)/i",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "mozDxfViewer.show",
+          "when": "resourceExtname =~ /\\.(dxf|dwg)/i"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Moz DXF/DWG Viewer",
+      "properties": {
+        "mozDxfViewer.python": {
+          "type": "string",
+          "default": "python3",
+          "description": "跑渲染后端的 Python 解释器（需要 PySide6）。Windows 上可填 python.exe 的完整路径。"
+        },
+        "mozDxfViewer.backendPyDir": {
+          "type": "string",
+          "default": "",
+          "description": "moz 仓库的 py/ 目录（含 moz_cadview.py / moz_cadio.py）。留空时自动探测：工作区里的仓库根，或扩展所在仓库。"
+        },
+        "mozDxfViewer.buildBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "libmozcadio.so 不存在时自动跑 `scripts/build_moz_cadio.sh`（首次要编译，约 1-2 分钟）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,27 @@
+# License
+
+本扩展的 **TypeScript/Webview 集成代码**（`src/`、`media/`、`package.json` 等）以
+**Apache License 2.0** 发布（与仓库根 LICENSE 一致，见 https://www.apache.org/licenses/LICENSE-2.0）：
+
+```
+Copyright 2026 luskyle
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+## 它调用的后端（不是本扩展的代码）
+
+扩展运行时调用 moz 仓库的 Python 渲染后端（`py/moz_cadview.py`、`py/moz_cadio.py` +
+`libmozcadio.so`）。该后端链接了 **libdxfrw（GPLv2-or-later）**，因此 `libmozcadio.so`
+是 **GPL 派生物**——对外分发/服务化时要过 GPL 的条款（详见仓库 `docs/third-party.md`；
+本扩展只是**调用进程外的命令**，不把这段代码打进 vsix，也不改它的许可）。

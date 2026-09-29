@@ -1,0 +1,62 @@
+name: moz-dxf-viewer CI
+
+on:
+  push:
+    paths:
+      - 'plugins/vscode-dxf-viewer/**'
+      - 'py/moz_cadview.py'
+      - 'py/moz_cadio.py'
+      - 'scripts/build_moz_cadio.sh'
+      - '3rd/libdxfrw/moz/**'
+      - '.github/workflows/dxf-viewer-ci.yml'
+  pull_request:
+    paths:
+      - 'plugins/vscode-dxf-viewer/**'
+      - 'py/moz_cadview.py'
+      - 'py/moz_cadio.py'
+      - 'scripts/build_moz_cadio.sh'
+      - '3rd/libdxfrw/moz/**'
+      - '.github/workflows/dxf-viewer-ci.yml'
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- 扩展本体：类型检查 + 打成 vsix ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: plugins/vscode-dxf-viewer/package-lock.json
+      - name: npm ci
+        working-directory: plugins/vscode-dxf-viewer
+        run: npm ci
+      - name: npm run compile
+        working-directory: plugins/vscode-dxf-viewer
+        run: npm run compile
+      - name: npm run package（产出 vsix）
+        working-directory: plugins/vscode-dxf-viewer
+        run: npm run package
+      - name: 校验 vsix 已生成
+        working-directory: plugins/vscode-dxf-viewer
+        run: test -n "$(ls *.vsix 2>/dev/null)" || (echo '没有产出 .vsix' && exit 1)
+
+      # --- 后端端到端冒烟：扩展实际依赖的渲染通路 ---
+      - name: 装编译工具链与 PySide6
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++
+          pip install --quiet PySide6
+      - name: 编译 libmozcadio.so
+        run: bash scripts/build_moz_cadio.sh
+      - name: 导出语料图纸为 SVG（扩展的调用方式）
+        run: |
+          QT_QPA_PLATFORM=offscreen \
+          MOZ_CADIO_LIB=$GITHUB_WORKSPACE/build/lib/libmozcadio.so \
+          python3 -m moz_cadview ../corpus/dxf/three-dxf/sample__data__demo.dxf \
+            --export-svg /tmp/demo.svg --light
+          test -s /tmp/demo.svg
+          grep -q "<svg" /tmp/demo.svg && echo "SVG 冒烟 OK（字符数 $(wc -c < /tmp/demo.svg)）"
+        working-directory: py
