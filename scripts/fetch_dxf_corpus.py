@@ -56,6 +56,10 @@ SOURCES = [
         "picks": [("examples_dxf/", 22), ("integration_tests/data/", 15)],
         "license": "MIT", "dest": "ezdxf",
         "max_size": 400_000,
+        # `examples_dxf/image/images.dxf` 引用的 4 张图：必须跟 DXF 放同一个目录
+        # （实体里写的是 ".\image1.jpg" 这种**相对名**），所以不压平、直接进 dest 根。
+        "extras": ["examples_dxf/image/image1.jpg", "examples_dxf/image/image2.png",
+                   "examples_dxf/image/image3.jpg", "examples_dxf/image/image4.jpg"],
     },
     {
         "repo": "gdsestimating/dxf-parser", "ref": "master",
@@ -109,6 +113,19 @@ def list_dxf(repo, ref):
         raise SystemExit(f"{repo}: 返回里没有 tree（{str(data)[:80]}）")
     return [(item["path"], item.get("size", 0))
             for item in data["tree"] if item["path"].lower().endswith(".dxf")]
+
+
+def tree_sizes(repo, ref):
+    """仓库树的 路径 → 体积 全表（给 `extras`（图片等非 DXF 文件）做截断校验）。"""
+    url = f"https://api.github.com/repos/{repo}/git/trees/{ref}?recursive=1"
+    ok, payload = curl(url)
+    if not ok:
+        return {}
+    try:
+        return {item["path"]: item.get("size", 0)
+                for item in json.loads(payload).get("tree", [])}
+    except ValueError:
+        return {}
 
 
 def pick(items, picks, max_size=0):
@@ -177,6 +194,38 @@ def main(argv=None):
                     total += 1
                 else:
                     print(f"  失败 {path}：{detail}", flush=True)
+                    failed.append(path)
+
+        # extras（图片等非 DXF）：按相对名进 dest 根；有体积表就校验，半截文件重下
+        extras = source.get("extras", [])
+        if extras:
+            sizes = tree_sizes(repo, ref)
+            for path in extras:
+                target = os.path.join(dest_dir, os.path.basename(path))
+                want = sizes.get(path, 0)
+                if not want:
+                    # 树里没有这个文件：上游根本不存在（实测 image4.jpg 就引用了但不存在，
+                    # 抓到的只能是 "404: Not Found" 文本）——别把它当成真图片
+                    if os.path.exists(target):
+                        print(f"  上游没有 {path}，删掉误存的 {os.path.basename(target)}",
+                              file=sys.stderr)
+                        os.remove(target)
+                    continue
+                if os.path.exists(target) and os.path.getsize(target) == want:
+                    continue
+                if args.dry_run:
+                    print(f"  会抓 {path}")
+                    continue
+                url = f"https://raw.githubusercontent.com/{repo}/{ref}/{quote(path)}"
+                keep, detail = curl(url, target)
+                if keep and os.path.getsize(target) == want:
+                    print(f"  {os.path.basename(target):58s} {os.path.getsize(target):8d} B",
+                          flush=True)
+                    total += 1
+                else:
+                    size = os.path.getsize(target) if os.path.exists(target) else 0
+                    print(f"  失败 {path}：{detail}（体积 {size}，应为 {want}）",
+                          file=sys.stderr)
                     failed.append(path)
     print(f"\n新抓取 {total} 个文件 -> {os.path.relpath(DEST_ROOT, ROOT)}")
     if failed:

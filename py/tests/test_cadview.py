@@ -296,8 +296,9 @@ def test_dwg_fit_is_not_blown_up_by_rays(cadview, qt_app):
 def test_images_show_pixels_or_generated_placeholders(qt_app, tmp_path):
     """IMAGE：找到图片文件就**真的载入像素**（画在外框里），找不到就**造一张占位图**。
 
-    `examples_dxf__image__images.dxf` 引用的 image1..4.jpg 语料里没有——以前只能画边框；
-    现在：缺图 → 64 张占位图（尺寸 = 各自的外框）+ 说明；补上文件 → 真像素，无说明。
+    `examples_dxf__image__images.dxf` 引用的 image1..4 图已补进语料（MIT）——image4.jpg
+    上游 ezdxf 自己都没放（树里查不到），所以：63 张真像素 + 1 张占位图，说明只提 image4；
+    把图抽走/换成临时的验证文件，能同时钉住"全缺 → 全占位"和"补齐 → 真像素、无说明"。
     """
     import shutil
 
@@ -308,20 +309,42 @@ def test_images_show_pixels_or_generated_placeholders(qt_app, tmp_path):
     src = CORPUS / "ezdxf" / "examples_dxf__image__images.dxf"
     if not src.exists():
         pytest.skip("DXF 语料缺失")
-    dst = tmp_path / "images.dxf"
-    shutil.copy(src, dst)
 
     def pixmap_items(scene):
         return [item for item in scene.items() if isinstance(item, QGraphicsPixmapItem)]
 
-    cad = cadview.load(str(dst))
+    def distinct_colors(item):
+        image = item.pixmap().toImage()
+        colors = set()
+        for x in range(0, image.width(), 7):
+            for y in range(0, image.height(), 7):
+                colors.add(image.pixel(x, y) & 0xFFFFFF)
+        return len(colors)
+
+    # ① 语料现在带了真图：image1/2/3 是真像素（照片、颜色多），image4 上游缺失 → 1 张占位图
+    cad = cadview.load(str(src))
     scene, _per, counts, _missing, notes = cadview.build_scene(cad)
     assert counts.get("IMAGE", 0) >= 60
+    items = pixmap_items(scene)
+    assert len(items) >= 60
+    assert any("占位图" in note and "image4.jpg" in note for note in notes), notes
+    assert not any("image1.jpg" in note or "image2.png" in note or "image3.jpg" in note
+                   for note in notes), notes
+    color_counts = sorted(distinct_colors(item) for item in items)
+    assert sum(1 for count in color_counts if count <= 60) == 1, "只有 image4 是占位图"
+    assert sum(1 for count in color_counts if count > 60) >= 60, "其余都是真像素（照片）"
+
+    # ② 把图抽走（拷到没有图的临时目录）：64 张占位图，尺寸 = 各自的外框
+    dst = tmp_path / "images.dxf"
+    shutil.copy(src, dst)
+    cad = cadview.load(str(dst))
+    scene, _per, counts, _missing, notes = cadview.build_scene(cad)
     items = pixmap_items(scene)
     assert len(items) >= 60
     assert all(0 < item.sceneBoundingRect().width() < 40 for item in items)
     assert any("占位图" in note for note in notes)
 
+    # ③ 再补齐成可读的图：真像素、无占位说明（验证"找到文件就载入"）
     image = QImage(64, 48, QImage.Format_RGB32)
     image.fill(QColor(200, 30, 30))                       # 左红
     QPainter(image).fillRect(0, 0, 32, 48, QColor(30, 200, 30))   # 右绿

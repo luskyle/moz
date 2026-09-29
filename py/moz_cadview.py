@@ -466,7 +466,7 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
     if placeholders:
         names = sorted(set(placeholders))
         shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
-        notes.append(f"{len(placeholders)} 个 IMAGE 用了占位图（找不到图片文件：{shown}）")
+        notes.append(f"{len(placeholders)} 个 IMAGE 用了占位图（图片文件缺失或读不了：{shown}）")
     if not counts and not per_layer:
         _add_empty_notice(scene, missing, notes, dark, cad.warnings)
     return scene, per_layer, counts, missing, notes

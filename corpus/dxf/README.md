@@ -8,7 +8,7 @@
 | `librecad/` | [LibreCAD/LibreCAD](https://github.com/LibreCAD/LibreCAD) 的 `librecad/src/lib/filters/tests/testdata/dxf/`、`support/library/{kinetics,power_station,elektro/dev,plan/air_water,algoritm,misc}/`、`res/dxf/` | GPLv2 | 第一组是 **LibreCAD 自己的 DXF 解析器测试集**（big5/hkscs 编码、R2007 的 classes/EED 二进制、块记录预览等脏活）；后面几组是**真实图块库**（运动机构、电站设备、电气元件、管路、建筑图块——多数不闭合、图层名随意），最接近"别人给的图" |
 | `dxf-viewer/` | [vagran/dxf-viewer](https://github.com/vagran/dxf-viewer) 的 `test/fixtures/` | MIT | 块（含递归/实例化/摊平）、标注（对齐/箭头/颜色）、圆与圆弧等**专项**样例 |
 | `three-dxf/` | [gdsestimating/three-dxf](https://github.com/gdsestimating/three-dxf) 的 `sample/` | MIT | 一个常规的整图样例 |
-| `ezdxf/` | [mozman/ezdxf](https://github.com/mozman/ezdxf) 的 `examples_dxf/`、`integration_tests/data/` | MIT | **我们依赖的解析库自己的 feature 示例与集成测试图**（块、标注、图层、ACIS 3DSOLID、老版本 AC1003…） |
+| `ezdxf/` | [mozman/ezdxf](https://github.com/mozman/ezdxf) 的 `examples_dxf/`、`integration_tests/data/` | MIT | **我们依赖的解析库自己的 feature 示例与集成测试图**（块、标注、图层、ACIS 3DSOLID、老版本 AC1003…）。图片示例引用的 `image1.jpg`/`image2.png`/`image3.jpg` 也随语料抓了（看图器能载入真像素；`image4.jpg` 上游树里**不存在**——ezdxf 自己的示例就缺这张图，会画占位图并说明） |
 | `dxf-parser/` | [gdsestimating/dxf-parser](https://github.com/gdsestimating/dxf-parser) 的 `test/data/`、`samples/data/` | MIT | 另一个 DXF 解析器的测试图（含"不合法的 SPLINE"这种脏活） |
 | `qcad/` | [qcad/qcad](https://github.com/qcad/qcad) 的 `support/data/tests/{layer,hatch,dimstyle,text}/`、`libraries/templates/metric/` | GPLv3 | 图层/剖面线/标注样式/文字等**专项**测试图 |
 | `freecad-library/` | [FreeCAD/FreeCAD-library](https://github.com/FreeCAD/FreeCAD-library) | LGPL-2.1 | 真实机械件轮廓（例如 MIT Vent 呼吸机零件），图纸规模与命名都"像真的" |
