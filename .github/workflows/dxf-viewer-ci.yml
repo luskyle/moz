@@ -51,15 +51,21 @@ jobs:
       - name: Build the platform backend
         shell: bash
         run: bash scripts/build_moz_cadio.sh
-      - name: Smoke the platform library (--model-json)
+      - name: Smoke the platform library, Windows leg
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:PYTHONPATH = Join-Path $PWD 'py'
+          $env:MOZ_CADIO_LIB = Join-Path $PWD 'build\lib\mozcadio.dll'
+          $env:PYTHONUTF8 = '1'
+          python -m moz_cadview 'corpus/dxf/three-dxf/sample__data__demo.dxf' --model-json 'model.json'
+          python -c "import json; d=json.load(open('model.json')); assert d['items'] and d['layers']; print('smoke OK:', len(d['layers']), 'layers,', len(d['items']), 'items (mozcadio.dll)')"
+      - name: Smoke the platform library, Unix leg
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          LIB_PATH="$(pwd)/build/lib/${{ matrix.lib_file }}"
-          if [[ "${{ runner.os }}" == 'Windows' ]]; then
-            # 原生 python：库路径要是 Windows 路径（正斜杠，反斜杠在 py 字符串里是转义）
-            LIB_PATH="$(cygpath -m "$LIB_PATH")"
-          fi
-          PYTHONPATH=py MOZ_CADIO_LIB="$LIB_PATH" \
+          PYTHONPATH=py PYTHONUTF8=1 \
+          MOZ_CADIO_LIB="$(pwd)/build/lib/${{ matrix.lib_file }}" \
           ${{ matrix.python }} -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
             --model-json model.json
           ${{ matrix.python }} -c "import json; d=json.load(open('model.json')); \
