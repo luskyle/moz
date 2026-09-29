@@ -146,7 +146,8 @@ def show(path, application):
     view = moz_cadview.CadView(cad, directory=directory, recursive=recursive)
     view.show()
     if directory:
-        print(f"右侧「图纸」面板里可以点着切换（共 {view.drawings.count()} 张）。")
+        print(f"右侧「图纸」面板里可以点着切换（共 "
+              f"{moz_cadview.tree_file_count(view.drawings)} 张）。")
     else:
         print(cad.report())
     print("\n窗口里：右侧「图纸」点着换图、「图层」开关图层；"
