@@ -11,7 +11,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # 构建 .so 的 glibc 基线 = 2.35（ubuntu-22.04）。ubuntu-latest(24.04) 编出的
+    # .so 会要求 GLIBC_2.38，装到旧系统（实测本机 2.35）直接加载失败——构建环境
+    # 必须保守：目标是"兼容 glibc ≥ 构建机 glibc"的机器。
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 

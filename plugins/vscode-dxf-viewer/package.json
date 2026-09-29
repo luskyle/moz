@@ -2,7 +2,7 @@
   "name": "moz-dxf-viewer",
   "displayName": "Moz DXF/DWG Viewer",
   "description": "在 VS Code 里直接查看 DXF/DWG 图纸：点击文件即打开，**可交互的原始图纸**（图层开关、悬停看图层/点选看图元、滚轮缩放、拖动平移）。自带 libdxfrw 渲染后端（.so + Python），装好即用。",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "luskyle",
   "license": "Apache-2.0",
   "icon": "icon.png",

@@ -20,7 +20,8 @@ on:
 
 jobs:
   build-and-smoke:
-    runs-on: ubuntu-latest
+    # 与 release 同一 glibc 基线（.so 兼容 glibc >= 2.35；见 release workflow 注释）
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
