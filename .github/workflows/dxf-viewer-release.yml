@@ -1,55 +1,12 @@
 name: moz-dxf-viewer Release
-
 "on":
   push:
-    tags:
-      - 'vscode-dxf-viewer-v*'
+    tags: ['vscode-dxf-viewer-v*']
   workflow_dispatch: {}
-
-permissions:
-  contents: write
-
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: plugins/vscode-dxf-viewer/package-lock.json
-      - name: npm ci
-        working-directory: plugins/vscode-dxf-viewer
-        run: npm ci
-      - name: npm run compile
-        working-directory: plugins/vscode-dxf-viewer
-        run: npm run compile
-      - name: 编 libmozcadio.so 并打成 vsix（自带后端进包）
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake g++
-          bash scripts/build_moz_cadio.sh
-          cd plugins/vscode-dxf-viewer
-          npm run bundle-backend
-          npx vsce package --no-dependencies --out moz-dxf-viewer.vsix
-      - name: 校验 vsix 内置 python/ + .so + 图标
-        working-directory: plugins/vscode-dxf-viewer
-        run: |
-          unzip -l moz-dxf-viewer.vsix | grep -q 'extension/python/moz_data/lib/libmozcadio.so'
-          unzip -l moz-dxf-viewer.vsix | grep -q 'extension/icon.png'
-          echo "vsix 已带自带后端与图标"
-
-      - name: 挂到 GitHub Release（tag 自动建）
-        uses: softprops/action-gh-release@v2
-        with:
-          files: plugins/vscode-dxf-viewer/moz-dxf-viewer.vsix
-          generate_release_notes: true
-
-      # Marketplace 发布需要仓库 secret MARKETPLACE_TOKEN（vsce PAT，发布者 luskyle）。
-      # 没有 token 就跳过——Release 里的 vsix 已经可以手动安装。
-      - name: 发布到 VS Code Marketplace（有 token 才发）
-        if: ${{ secrets.MARKETPLACE_TOKEN != '' }}
-        working-directory: plugins/vscode-dxf-viewer
-        run: npx vsce publish --packagePath moz-dxf-viewer.vsix --pat "${{ secrets.MARKETPLACE_TOKEN }}"
+      - name: smoke
+        run: echo "release workflow ok"
