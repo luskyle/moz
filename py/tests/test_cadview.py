@@ -247,6 +247,52 @@ def test_only_mleader_drawing_is_no_longer_blank(cadview, qt_app):
     assert texts
 
 
+def test_fit_ignores_infinite_lines(cadview, qt_app, tmp_path):
+    """适应视角/导出的取景要**排除 RAY/XLINE**——它们是按图纸尺度放大 20 倍画出来的。
+
+    不排除的话，场景框会被两组构造线撑成几万单位、真实几何被压成几个像素，用户看到的就是
+    一张白纸（实测 `samples__sample_AC1015.dwg`：场景框 204634×161647，真实几何几百单位）。
+    """
+    dxf = tmp_path / "ray.dxf"
+    dxf.write_text(
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n100.\n21\n0.\n31\n0.\n"
+        "0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n0.\n21\n100.\n31\n0.\n"
+        "0\nRAY\n8\n0\n10\n50.\n20\n0.\n30\n0.\n11\n1.\n21\n0.\n31\n0.\n"
+        "0\nENDSEC\n0\nEOF\n",
+        encoding="utf-8")
+    cad = cadview.load(str(dxf))
+    scene, _per_layer, _counts, _missing, _notes = cadview.build_scene(cad)
+    drawable = cadview.view_extent(scene)
+    full = scene.itemsBoundingRect()
+    assert full.width() > 1000                        # 场景框确实被 RAY 撑大了（放大 20 倍）
+    assert drawable.width() < 300 and drawable.height() < 300     # 取景只剩有限几何
+
+    out = tmp_path / "out.png"
+    cadview.export(cad, str(out), width=400, height=300, dark=False)
+    from PySide6.QtGui import QImage
+
+    image = QImage(str(out))
+    assert (image.width(), image.height()) == (400, 300)
+    ink = sum(1 for x in range(0, 400, 2) for y in range(0, 300, 2)
+              if (image.pixel(x, y) & 0xFFFFFF) != 0xFFFFFF)
+    assert ink >= 100, f"图线被压成碎点：只有 {ink} 个墨迹像素"
+
+
+def test_dwg_fit_is_not_blown_up_by_rays(cadview, qt_app):
+    """真实 DWG：适应视角的范围必须落在图纸内容上（含 RAY/XLINE 的样本以前整张空白）。"""
+    path = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    cad = cadview.load(str(path))
+    scene, _per_layer, counts, _missing, _notes = cadview.build_scene(cad)
+    assert counts.get("RAY", 0) >= 1 and counts.get("XLINE", 0) >= 1
+    assert scene.itemsBoundingRect().width() > 10000          # 场景框含无限长线
+    drawable = cadview.view_extent(scene)
+    assert drawable.width() < 10000 and drawable.width() > 100
+    assert drawable.height() > 100
+
+
 # --- 目录与"方便打开"（图纸列表、点击切换、拖拽、demo） ---
 
 

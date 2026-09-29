@@ -30,6 +30,11 @@ import moz_cadio
 __all__ = ["AciTable", "CadView", "build_scene", "describe", "export", "load",
            "linetype_pattern", "main", "resolve_colour"]
 
+# 无限长线（RAY/XLINE）item 的标记：适应视角与导出时把它排除（它们按图纸尺度放大 20 倍，
+# 不排除的话场景框会被撑成几万单位，真实几何缩成几个像素——用户看到的就是空白画布）。
+# 用 Qt.UserRole(=0x0100) 值的整数键，避免顶层 import Qt。
+_INFINITE_ROLE = 0x0100
+
 # 线型名 → 虚线样式（以线宽为单位；真实 DXF 的线型定义在 LTYPE 表里，我们没解析，
 # 所以这里是**视觉近似**：能区分实线/虚线/中心线/点划线就够了）
 LINETYPE_PATTERNS = {
@@ -432,6 +437,11 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
             # 计数按**图元**算（一个多线展开成 N 条平行线仍算 1 个图元），面板里读起来对得上
             per_layer.setdefault(entity.layer, []).extend(items)
             counts[entity.kind] = counts.get(entity.kind, 0) + 1
+            if entity.kind in ("RAY", "XLINE"):
+                # 无限长线是按图纸尺度拉长的——适应视角/导出时要把它们排除，否则
+                # 一张画布会被那两组线撑成几万单位的空框，真实几何缩成几个像素
+                for item in items:
+                    item.setData(_INFINITE_ROLE, True)
     if not counts and not per_layer:
         _add_empty_notice(scene, missing, notes, dark, cad.warnings)
     return scene, per_layer, counts, missing, notes
@@ -454,6 +464,25 @@ def _add_empty_notice(scene, missing, notes, dark, warnings=()):  # pragma: no c
     item.setTransform(QTransform().scale(1, -1), True)     # 视图 Y 翻转，文字翻回来
     scene.addItem(item)
     return item
+
+
+def view_extent(scene):
+    """场景里"有限几何"的包围盒（**排除** RAY/XLINE——它们是按图纸尺度拉长的无限长线）。
+
+    给"适应视角/导出取景"用：否则一组构造线就能把画框撑成几万单位，整张图被压成碎点，
+    看起来就是一张白纸（实测 `samples__sample_AC1015.dwg`：场景框 204634×161647，而真实
+    几何只有几百个单位）。只有无限长线时退回整场景框。
+    """
+    from PySide6.QtCore import QRectF
+
+    rect = QRectF()
+    for item in scene.items():
+        if item.data(_INFINITE_ROLE):
+            continue
+        rect = rect.united(item.sceneBoundingRect())
+    if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+        return rect
+    return scene.itemsBoundingRect()
 
 
 def _drawing_extent(cad):
@@ -866,7 +895,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
 
     def fit(self):
         from PySide6.QtCore import Qt
-        rect = self.scene.itemsBoundingRect()
+        rect = view_extent(self.scene)
         if rect.isValid() and rect.width() > 0 and rect.height() > 0:
             self.view.fitInView(rect, Qt.KeepAspectRatio)
 
@@ -897,7 +926,7 @@ def export(cad, path, *, width=1600, height=1200, dark=True):
     from PySide6.QtSvg import QSvgGenerator
 
     scene, _per_layer, counts, missing, _notes = build_scene(cad, dark=dark)
-    rect = scene.itemsBoundingRect()
+    rect = view_extent(scene)
     if rect.isValid():
         rect = rect.adjusted(-rect.width() * 0.02 - 1, -rect.height() * 0.02 - 1,
                              rect.width() * 0.02 + 1, rect.height() * 0.02 + 1)
