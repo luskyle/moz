@@ -78,3 +78,20 @@ jobs:
                 f"{len(data['layers'])} 图层、{len(data['items'])} 图元、"
                 f"{len(texts)} 条文字（自带后端）")
           EOF
+      # IMAGE 的像素内嵌是纯 Python 通路（无 Qt 也能出 raster），必须钉住
+      - name: IMAGE 像素内嵌冒烟（--model-json 自带后端）
+        run: |
+          PYTHONPATH=/tmp/vsix/extension/python \
+          MOZ_CADIO_LIB=/tmp/vsix/extension/python/moz_data/lib/libmozcadio.so \
+          python3 -m moz_cadview corpus/dxf/ezdxf/examples_dxf__image__images.dxf \
+            --model-json /tmp/images.json
+          python3 - <<'EOF'
+          import json
+          data = json.load(open('/tmp/images.json'))
+          images = [i for i in data['items'] if i['kind'] == 'IMAGE']
+          assert images, '语料应有 IMAGE 实体'
+          rendered = [i for i in images if i.get('raster', '').startswith('data:image/')]
+          assert rendered, 'IMAGE 应内嵌图片像素（data URL）'
+          assert all(len(i['corners']) == 6 for i in rendered), 'IMAGE 缺外框 corners'
+          print(f"IMAGE raster 冒烟 OK：{len(rendered)}/{len(images)} 张内嵌像素")
+          EOF

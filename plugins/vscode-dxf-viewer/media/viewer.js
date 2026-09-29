@@ -53,18 +53,27 @@
     let y0 = Infinity;
     let x1 = -Infinity;
     let y1 = -Infinity;
+    const grow = (x, y) => {
+      if (x < x0) { x0 = x; }
+      if (x > x1) { x1 = x; }
+      if (y < y0) { y0 = y; }
+      if (y > y1) { y1 = y; }
+    };
     for (const item of model.items) {
+      const c = item.corners;
+      if (c) {
+        // 图片/PDF 底图：外框 4 角（p0, p0+u, p0+v, p0+u+v）也得进包围盒
+        grow(c[0], c[1]);
+        grow(c[0] + c[2], c[1] + c[3]);
+        grow(c[0] + c[4], c[1] + c[5]);
+        grow(c[0] + c[2] + c[4], c[1] + c[3] + c[5]);
+      }
       const points = item.points;
       if (!points) {
         continue;
       }
       for (let i = 0; i < points.length; i += 2) {
-        const x = points[i];
-        const y = points[i + 1];
-        if (x < x0) { x0 = x; }
-        if (x > x1) { x1 = x; }
-        if (y < y0) { y0 = y; }
-        if (y > y1) { y1 = y; }
+        grow(points[i], points[i + 1]);
       }
     }
     if (!(x1 > x0) || !(y1 > y0)) {
@@ -75,6 +84,40 @@
     state.tx = (canvas.clientWidth - (x1 - x0) * s) / 2 - x0 * s;
     state.ty = (canvas.clientHeight + (y1 - y0) * s) / 2 + y0 * s;
     invalidate();
+  }
+
+  /* raster（图片/PDF 底图）：data URL 缓存成 Image，画进 corners 给的仿射框。 */
+  const rasterImages = new Map();   // data URL -> { img, loaded }
+  function rasterImage(dataUrl) {
+    let entry = rasterImages.get(dataUrl);
+    if (!entry) {
+      const img = new Image();
+      entry = { img, loaded: false };
+      img.onload = () => {
+        entry.loaded = true;
+        invalidate();
+      };
+      img.src = dataUrl;
+      rasterImages.set(dataUrl, entry);
+    }
+    return entry;
+  }
+
+  function drawRaster(item) {
+    const entry = rasterImage(item.raster);
+    if (!entry.loaded) {
+      return;                 // 还没解码完，下一帧再画
+    }
+    const c = item.corners;
+    if (!c) {
+      return;
+    }
+    ctx.save();
+    ctx.translate(c[0], c[1]);
+    // corners = [p0, u, v]（世界坐标）：单位方块 → p0 + u·x + v·y（与后端同一公式）
+    ctx.transform(c[2], c[3], c[4], c[5], 0, 0);
+    ctx.drawImage(entry.img, 0, 0, 1, 1);
+    ctx.restore();
   }
 
   function invalidate() {
@@ -105,6 +148,10 @@
       }
       if (item.text) {
         drawText(item);
+        continue;
+      }
+      if (item.raster) {
+        drawRaster(item);       // 图片/PDF 底图：真实像素（不画外框线，同 Qt 看图器）
         continue;
       }
       const points = item.points;

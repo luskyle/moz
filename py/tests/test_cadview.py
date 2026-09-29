@@ -244,6 +244,58 @@ def test_mirrored_insert_renders_mirrored_text(qt_app, tmp_path):
         f"镜像块文字的姿态应为 diag(-1,-1)（实际 m11={transform.m11()} m22={transform.m22()}）"
 
 
+# --- raster：IMAGE 真像素 / UNDERLAY PDF 页面（webview 通路，--model-json） ---
+
+
+def test_model_as_json_embeds_image_pixels(cadview):
+    """IMAGE：找到引用的图片就把**真实像素**内嵌成 data URL（webview 直接画，纯 Python）。
+
+    读文件 base64 → ``data:image/...;base64,...``；corners 是吃块矩阵后的世界坐标，
+    webview 画进仿射外框。缺失的引文件（image4.jpg）没有 raster，只留外框线。
+    """
+    path = CORPUS / "ezdxf" / "examples_dxf__image__images.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    model = cadview.model_as_json(cadview.load(str(path)))
+    images = [it for it in model["items"] if it["kind"] == "IMAGE"]
+    assert images
+    rendered = [it for it in images
+                if it.get("raster", "").startswith("data:image/")]
+    assert len(rendered) >= 60, f"image1..3 是真图，应内嵌像素（实得 {len(rendered)} 张）"
+    missing = [it for it in images if not it.get("raster")]
+    assert len(missing) == 1, "image4.jpg 上游缺失：只有它没有 raster"
+    for it in rendered:
+        assert len(it["corners"]) == 6
+        assert abs(it["corners"][2]) > 1e-9 or abs(it["corners"][3]) > 1e-9
+        assert all(it["corners"][i] == it["corners"][i]
+                   for i in range(6))          # 全是有限数（JSON 可序列化）
+
+
+def test_model_as_json_underlay_pdf_renders_page_when_qt_available(cadview):
+    """UNDERLAY：有 QtPdf 就把 PDF 第 1 页渲染成 PNG data URL（同 Qt 看图器的外框公式）。
+
+    没装 PySide6 时返回 None（只画外框线，行为不崩）；本测试只在有 PySide6 的环境
+    断言页面尺寸 595×842×scale 的外框语义（v 反掉、像素向下）。
+    """
+    path = DWGS / "acadsharp" / "samples__sample_AC1021.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    try:
+        import PySide6.QtPdf  # noqa: F401
+    except Exception:
+        pytest.skip("PySide6 缺失：PDF 底图 data URL 是增强路径，跳过")
+    model = cadview.model_as_json(cadview.load(str(path)))
+    underlays = [it for it in model["items"] if it["kind"] == "UNDERLAY"]
+    assert underlays
+    rendered = [it for it in underlays
+                if it.get("raster", "").startswith("data:image/png")]
+    assert rendered, "有 PySide6 时 UNDERLAY 应渲染出 PDF 页面"
+    c0x, c0y, ux, uy, vx, vy = rendered[0]["corners"]
+    _ = (c0x, c0y)
+    assert abs(ux) >= 594 or abs(uy) >= 594, "页面宽 595 pt × scale 1"
+    assert abs(vx) >= 841 or abs(vy) >= 841, "页面高 842 pt × scale 1（v 已反）"
+
+
 # --- 场景装配 ---
 
 

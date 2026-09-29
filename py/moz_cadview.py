@@ -21,8 +21,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
+import mimetypes
 import os
 import sys
 
@@ -153,6 +155,85 @@ def text_pose_matrix(matrix, rotation_deg):
     return flipped[0], flipped[1], flipped[3], flipped[4]
 
 
+def _corners_world(corners, matrix):
+    """外框 (c0, u, v) 吃块矩阵 → webview 用的世界坐标 [p0x, p0y, ux, uy, vx, vy]。
+
+    webview 画图：translate(p0) + transform(ux, uy, vx, vy) 后画一个单位方块，即贴进
+    "插入点 + 比例×尺寸" 的外框——与 Qt 看图器的 ``_pixmap_item`` 同一公式。
+    """
+    c0, u, v = corners
+    p0 = moz_cadio.matrix_apply(matrix, (c0[0], c0[1], 0.0))
+    p1 = moz_cadio.matrix_apply(matrix, (c0[0] + u[0], c0[1] + u[1], 0.0))
+    p2 = moz_cadio.matrix_apply(matrix, (c0[0] + v[0], c0[1] + v[1], 0.0))
+    return [p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1], p2[0] - p0[0], p2[1] - p0[1]]
+
+
+def _file_as_data_url(path, size_limit=3 * 1024 * 1024):
+    """内嵌文件（图片）→ data URL；缺失/太大/读不了 → None（webview 只画外框线）。"""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        size = os.path.getsize(path)
+        if size <= 0 or size > size_limit:
+            return None
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as handle:
+            payload = base64.b64encode(handle.read()).decode("ascii")
+        return f"data:{mime};base64,{payload}"
+    except OSError:
+        return None
+
+
+def _image_raster_data_url(drawing_path, entity):
+    """IMAGE 引用的图片 → data URL（纯 Python：读文件 base64，浏览器端解码画像素）。"""
+    return _file_as_data_url(_resolve_referenced_file(drawing_path, entity.name))
+
+
+def _underlay_pdf_data_url(entity, drawing_path):
+    """UNDERLAY 引用的 PDF 第 1 页 → ``(data_url, corners)``；无 PySide6/打不开 → None。
+
+    **有 PySide6 才渲染**（webview 通路默认零依赖）：渲染成 PNG 内嵌，与 Qt 看图器同一个
+    外框公式（插入点 + 比例×页面尺寸，PDF 像素 y 向下所以 v 反掉、起点放页面顶）。
+    渲染不了就只画外框线，语义同 Qt 看图器的"边界占位"。
+    """
+    source = _resolve_referenced_file(drawing_path, entity.name)
+    if not source or not source.lower().endswith(".pdf"):
+        return None
+    try:
+        from PySide6.QtCore import QBuffer, QSize
+        from PySide6.QtPdf import QPdfDocument
+    except Exception:
+        return None
+    document = QPdfDocument()
+    if document.load(source) != QPdfDocument.Error.None_:
+        return None
+    size = document.pagePointSize(0)                 # 页面尺寸（pt）
+    width, height = size.width(), size.height()
+    if width <= 0 or height <= 0:
+        return None
+    pixel_w = max(32, min(2000, round(width * 2)))   # ~144 DPI，封顶防撑爆内存
+    pixel_h = max(32, min(2000, round(height * 2)))
+    page = document.render(0, QSize(pixel_w, pixel_h))
+    if page.isNull():
+        return None
+    buffer = QBuffer()
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    if not page.save(buffer, "PNG"):
+        return None
+    payload = bytes(buffer.data())
+    if not payload or len(payload) > 3 * 1024 * 1024:
+        return None
+    scale_x = entity.xscale or 1.0
+    scale_y = entity.yscale or 1.0
+    sine, cosine = math.sin(entity.rotation), math.cos(entity.rotation)
+    u = (width * scale_x * cosine, width * scale_x * sine)
+    v = (-height * scale_y * sine, height * scale_y * cosine)
+    c0 = entity.p1[:2] if entity.p1 else (0.0, 0.0)
+    top_left = (c0[0] + v[0], c0[1] + v[1])          # 页面上边对准世界"上"边（y 反掉）
+    data_url = f"data:image/png;base64,{base64.b64encode(payload).decode('ascii')}"
+    return data_url, (top_left, u, (-v[0], -v[1]))
+
+
 def model_as_json(cad, dark=False):
     """把规范化模型摊平成 Webview **可交互**的 JSON（图元折线 + 文字，颜色按主题算好）。
 
@@ -194,6 +275,26 @@ def model_as_json(cad, dark=False):
                              "rot": entity.rotation + turn,
                              # 姿态矩阵：旋转+缩放+镜像都是它的（webview 画文字用它）。
                              "pose": list(text_pose_matrix(matrix, entity.rotation))})
+        if entity.kind == "IMAGE":
+            # 像素图：找到引用文件就内嵌 data URL（webview 直接画真实像素）；
+            # 缺失/太大：只画外框线（语义同 Qt 看图器的占位图）。
+            raster = _image_raster_data_url(cad.path, entity)
+            if raster:
+                corners = _image_corners(entity)
+                if corners:
+                    item["raster"] = raster
+                    item["corners"] = _corners_world(corners, matrix)
+        elif entity.kind == "UNDERLAY":
+            # 底图参照：有 PySide6 就把 PDF 第 1 页渲染成 PNG 内嵌；否则只画外框线。
+            rendered = None
+            try:
+                rendered = _underlay_pdf_data_url(entity, cad.path)
+            except Exception:
+                rendered = None
+            if rendered:
+                data_url, corners = rendered
+                item["raster"] = data_url
+                item["corners"] = _corners_world(corners, matrix)
         flat: list[float] = []
         for chain in moz_cadio.entity_polylines(entity):
             for x, y in chain:
@@ -202,7 +303,8 @@ def model_as_json(cad, dark=False):
         if flat:
             item["points"] = flat
             item["closed"] = bool(entity.closed)
-        if item.get("text") is not None or item.get("points") is not None:
+        if item.get("text") is not None or item.get("points") is not None \
+                or item.get("raster") is not None:
             items.append(item)
     return {
         "format": cad.format,
