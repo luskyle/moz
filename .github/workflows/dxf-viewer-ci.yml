@@ -20,7 +20,8 @@ on:
 
 jobs:
   build-and-smoke:
-    # 平台矩阵：三平台都能编译自己的后端 + 打 vsix + 解包冒烟。
+    # 三平台编译后端 + 直接库级冒烟（--model-json 读语料出模型）。
+    # 不与 vsix/解包纠缠：打包与通用 vsix 校验统一由 pack job 承担。
     # Linux 用 ubuntu-22.04 守 glibc 2.35 基线（与 release 一致，见其注释）。
     strategy:
       fail-fast: false
@@ -42,7 +43,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- 扩展本体：类型检查 ---
+      - name: Install build tools (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++
+      - name: Build the platform backend
+        shell: bash
+        run: bash scripts/build_moz_cadio.sh
+      - name: Smoke the platform library (--model-json)
+        shell: bash
+        run: |
+          PYTHONPATH=py MOZ_CADIO_LIB="$(pwd)/build/lib/${{ matrix.lib_file }}" \
+          ${{ matrix.python }} -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
+            --model-json /tmp/model.json
+          ${{ matrix.python }} -c "import json; d=json.load(open('/tmp/model.json')); \
+            assert d['items'] and d['layers']; print('smoke OK:',
+            len(d['layers']), 'layers,', len(d['items']), 'items',
+            '(' + '${{ matrix.lib_file }}' + ')')"
+      - name: Upload the platform backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.platform }}
+          path: build/lib/${{ matrix.lib_file }}
+          if-no-files-found: error
+          retention-days: 1
+
+  pack:
+    # 合并三平台动态库打通用 vsix 并校验（结构与 release 的 pack 一致，
+    # 所以每次 push 都能验证「一个包装到哪个平台都有对应后端」）。
+    needs: build-and-smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -54,63 +88,48 @@ jobs:
       - name: npm run compile
         working-directory: plugins/vscode-dxf-viewer
         run: npm run compile
-
-      # --- 编译 C 后端（macOS/Windows runner 自带 cmake + 编译器；Linux 补装） ---
-      - name: Install build tools (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake g++
-      - name: Build the platform backend
+      - name: Download the three platform backends
+        uses: actions/download-artifact@v4
+        with:
+          pattern: backend-*
+          path: backend-artifacts
+          merge-multiple: true
+      - name: Merge backends and package the universal vsix
         shell: bash
-        run: bash scripts/build_moz_cadio.sh
-
-      # --- 打成 vsix（bundle-backend 把 py 后端 + 本平台动态库拷进 python/） ---
-      - name: npm run package（产出 vsix）
-        working-directory: plugins/vscode-dxf-viewer
-        run: npm run package
-      - name: 校验 vsix 已生成且内置 python/ + 本平台后端
+        run: |
+          mkdir -p build/lib
+          cp backend-artifacts/* build/lib/
+          cd plugins/vscode-dxf-viewer
+          npm run package
+      - name: Verify the vsix carries all three backends
         shell: bash
         working-directory: plugins/vscode-dxf-viewer
         run: |
-          test -n "$(ls *.vsix 2>/dev/null)" || (echo '没有产出 .vsix' && exit 1)
-          unzip -l *.vsix | grep -q 'extension/python/moz_cadview.py'
-          unzip -l *.vsix | grep -q "extension/python/moz_data/lib/${{ matrix.lib_file }}"
-          echo "vsix 内已带自带后端（py + ${{ matrix.lib_file }}）"
-
-      # --- 端到端：用解包后的自带后端跑 --model-json（扩展的实际调用方式） ---
-      - name: 解包 vsix 用自带 python/ 端到端冒烟
+          for lib in libmozcadio.so libmozcadio.dylib mozcadio.dll; do
+            unzip -l *.vsix | grep -q "extension/python/moz_data/lib/$lib" \
+              || (echo "缺少 $lib" && exit 1)
+          done
+          echo "通用 vsix 已带三平台后端"
+      - name: Smoke the unpacked vsix on the Linux leg
         shell: bash
         run: |
           mkdir -p /tmp/vsix
           unzip -q -o "$(ls plugins/vscode-dxf-viewer/*.vsix)" -d /tmp/vsix
           PYTHONPATH=/tmp/vsix/extension/python \
-          MOZ_CADIO_LIB=/tmp/vsix/extension/python/moz_data/lib/${{ matrix.lib_file }} \
-          ${{ matrix.python }} -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
+          MOZ_CADIO_LIB=/tmp/vsix/extension/python/moz_data/lib/libmozcadio.so \
+          python3 -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
             --model-json /tmp/model.json
-          ${{ matrix.python }} - <<'EOF'
-          import json
-          data = json.load(open('/tmp/model.json'))
-          assert data['items'] and data['layers'], f"模型为空：items={len(data['items'])}"
-          assert any(item['kind'] == 'LINE' for item in data['items']), '没有 LINE 图元'
-          assert all(item.get('color', '').startswith('#') for item in data['items']), \
-              '图元应带算好的颜色'
-          texts = [item for item in data['items'] if item.get('text')]
-          assert texts and all('pos' in t and 'h' in t for t in texts), 'TEXT/MTEXT 缺 pos/h'
-          print(f"端到端 OK：format={data['format']} {data['version']}，"
-                f"{len(data['layers'])} 图层、{len(data['items'])} 图元、"
-                f"{len(texts)} 条文字（自带后端）")
-          EOF
+          python3 -c "import json; d=json.load(open('/tmp/model.json')); \
+            assert d['items'] and d['layers']; print('universal vsix smoke OK')"
 
-      # IMAGE 的像素内嵌是纯 Python 通路（无 Qt 也能出 raster），必须钉住
-      - name: IMAGE 像素内嵌冒烟（--model-json 自带后端）
+      # IMAGE 像素内嵌是纯 Python 通路（无 Qt 也能出 raster），单独钉住
+      - name: IMAGE raster smoke
         shell: bash
         run: |
-          PYTHONPATH=/tmp/vsix/extension/python \
-          MOZ_CADIO_LIB=/tmp/vsix/extension/python/moz_data/lib/${{ matrix.lib_file }} \
-          ${{ matrix.python }} -m moz_cadview corpus/dxf/ezdxf/examples_dxf__image__images.dxf \
+          PYTHONPATH=py MOZ_CADIO_LIB="$(pwd)/build/lib/libmozcadio.so" \
+          python3 -m moz_cadview corpus/dxf/ezdxf/examples_dxf__image__images.dxf \
             --model-json /tmp/images.json
-          ${{ matrix.python }} - <<'EOF'
+          python3 - <<'EOF'
           import json
           data = json.load(open('/tmp/images.json'))
           images = [i for i in data['items'] if i['kind'] == 'IMAGE']

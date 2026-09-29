@@ -26,7 +26,7 @@
 从仓库 GitHub Releases（标签 `vscode-dxf-viewer-v*`）或 CI 产物下载 vsix 文件，然后：
 
 ```bash
-code --install-extension moz-dxf-viewer-0.2.3.vsix
+code --install-extension moz-dxf-viewer-0.2.4.vsix
 ```
 
 装完**立刻能用**，机器上只需一个 Python 3.8+（默认找 `python3`，Windows 可在设置里
@@ -48,21 +48,19 @@ code --install-extension moz-dxf-viewer-0.2.3.vsix
 
 ## 平台说明（重要）
 
-扩展自带的动态库（Linux `libmozcadio.so` / macOS `libmozcadio.dylib` / Windows
-`mozcadio.dll`）是**按平台构建的**：
+扩展自带的渲染后端**一个包覆盖三个平台**：vsix 里同时内置 Linux
+`libmozcadio.so`、macOS `libmozcadio.dylib`、Windows `mozcadio.dll`，安装后运行时
+自动按当前平台选库——所以**同一个 vsix（市场版 / GitHub Release 版）在任何系统上都
+能用**。
 
-- **Windows / macOS 用户**：从仓库 GitHub Release（`vscode-dxf-viewer-v*`）下载
-  **对应平台**的 vsix——每次发版会同时出三个平台的产物：
-  `moz-dxf-viewer-0.2.3-linux.vsix`（Linux x86-64）、`-darwin.vsix`（macOS）、
-  `-win32.vsix`（Windows x64）。
-- **市场版是哪个平台的**：VS Code Marketplace 同一版本只能挂一份安装包，市场里发的是
-  **Linux x86-64** 版；Windows/macOS 请走 GitHub Release 下载对应 vsix 手动安装。
-- **macOS 架构注意**：GitHub Release 的 darwin vsix 在 Apple Silicon 与 Intel 上
-  通用与否看构建镜像（当前为 macos-latest）；跨架构装机不识别平台库时，请用源码
-  自建：克隆本仓库，根目录执行 `bash scripts/build_moz_cadio.sh`，再在设置里把
+- **Linux 兼容性**：Linux 库构建在 GLIBC 2.35 基线上（Ubuntu 22.04 同代或更新的
+  发行版直接可用；更老的 glibc 请用仓库后端自编）。
+- **macOS 架构注意**：GitHub Release / 市场版的 darwin 库由 macos-latest 镜像构建
+  （Apple Silicon）；Intel Mac 装了 arm64 库会在点开图纸时报「平台不匹配」，此时用
+  源码自建：克隆本仓库，根目录执行 `bash scripts/build_moz_cadio.sh`，再在设置里把
   `mozDxfViewer.backendPyDir` 指向仓库的 `py/` 目录。
-- **Linux 兼容性**：Linux vsix 构建在 GLIBC 2.35 基线上（Ubuntu 22.04 同代或更新的
-  发行版均可直接使用；更老的 glibc 请用仓库后端自编）。
+- 本地 `npm run package` 只含**本平台**的库（开发用）；发布时由 CI 合并三平台动态库
+  打出通用 vsix。
 
 ## 常见问题
 
