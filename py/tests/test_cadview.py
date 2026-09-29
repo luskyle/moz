@@ -381,6 +381,38 @@ def test_dwg_image_loads_real_pixels_from_the_corpus(qt_app):
     assert len(colors) > 100, f"载入的是真照片，不是占位图（颜色 {len(colors)} 种）"
 
 
+def test_underlay_pdf_is_rendered_onto_the_page(qt_app, tmp_path):
+    r"""UNDERLAY 引用的 PDF **第 1 页要真的渲染出来**（不再只是画边界/十字标记）。
+
+    ACadSharp 样本引用 `..\pdf-definition.pdf`（语料里有）：渲染成一整张 A4 页面
+    （595×842 pt × scale 1）放在插入点；文件缺失/打不开就落回"边界占位 + 说明"。
+    """
+    import shutil
+
+    import moz_cadview as cadview
+    from PySide6.QtWidgets import QGraphicsPixmapItem
+
+    path = DWGS / "acadsharp" / "samples__sample_AC1021.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+
+    # 有 PDF：渲染出页面像素，且没有"UNDERLAY 只画了占位"的说明
+    scene, _per, counts, _missing, notes = cadview.build_scene(cadview.load(str(path)))
+    assert counts.get("UNDERLAY", 0) >= 1
+    assert not any("UNDERLAY 只画了占位" in note for note in notes), notes
+    pixmaps = [item for item in scene.items() if isinstance(item, QGraphicsPixmapItem)]
+    assert any(abs(item.sceneBoundingRect().width() - 595) < 1
+               and abs(item.sceneBoundingRect().height() - 842) < 1
+               for item in pixmaps), "PDF 页面应按 595×842(pt)×scale 画在外框里"
+
+    # 没有 PDF（拷到临时目录）：落回占位说明 + 边界照样画
+    dst = tmp_path / "sample_AC1021.dwg"
+    shutil.copy(path, dst)
+    scene, _per, counts, _missing, notes = cadview.build_scene(cadview.load(str(dst)))
+    assert counts.get("UNDERLAY", 0) >= 1
+    assert any("UNDERLAY 只画了占位" in note and "pdf-definition" in note for note in notes)
+
+
 def test_mouse_drag_pans_the_view(qt_app):
     """看图区**左键按住拖动 ≡ 内容跟手**（1:1，放大后也一样跟）。
 

@@ -404,7 +404,7 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         return items
 
     scale_box = _drawing_extent(cad)
-    missing, notes, placeholders = [], [], []
+    missing, notes, placeholders, underlay_failed = [], [], [], []
     for entity, matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
         if entity.kind == "IMAGE":
             # 像素图：找到文件就真的载入（按图纸所在目录解析相对路径），找不到就画一张
@@ -412,7 +412,7 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
             corners = _image_corners(entity)
             if corners is None:
                 continue                             # 没有可放图的位置（尺寸 0）
-            source = _resolve_image_file(cad.path, entity.name)
+            source = _resolve_referenced_file(cad.path, entity.name)
             loaded = False
             if source:
                 from PySide6.QtGui import QPixmap
@@ -427,6 +427,22 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
             if not loaded:
                 placeholders.append(source or entity.name or "IMAGE")
             continue
+        if entity.kind == "UNDERLAY":
+            # 底图参照：能渲染就把引用的 PDF 第 1 页画进外框（插入点 + 比例×页面尺寸）；
+            # 打不开/缺失就落回下面的通用分支画边界/十字标记，并记一笔。
+            loaded = None
+            try:
+                loaded = _underlay_pdf(entity, cad.path)
+            except Exception:                        # QtPdf 缺失/渲染失败都落回占位
+                loaded = None
+            if loaded is not None:
+                pixmap, corners = loaded
+                item = _pixmap_item(pixmap, corners, matrix)
+                scene.addItem(item)
+                per_layer.setdefault(entity.layer, []).append(item)
+                counts[entity.kind] = counts.get(entity.kind, 0) + 1
+                continue
+            underlay_failed.append(entity.name or "PDF")
         if entity.kind == "MLEADER":
             # 多重引线：文字 + 引线折线（内容块的实体已经由 iter_draw 展开）——算**一个**图元
             items = []
@@ -467,6 +483,10 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         names = sorted(set(placeholders))
         shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
         notes.append(f"{len(placeholders)} 个 IMAGE 用了占位图（图片文件缺失或读不了：{shown}）")
+    if underlay_failed:
+        names = sorted(set(underlay_failed))
+        shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+        notes.append(f"{len(underlay_failed)} 个 UNDERLAY 只画了占位（PDF 打不开或缺失：{shown}）")
     if not counts and not per_layer:
         _add_empty_notice(scene, missing, notes, dark, cad.warnings)
     return scene, per_layer, counts, missing, notes
@@ -519,26 +539,57 @@ def _image_corners(entity):
     return c0, (c1[0] - c0[0], c1[1] - c0[1]), (c3[0] - c0[0], c3[1] - c0[1])
 
 
-def _resolve_image_file(drawing_path, name):
-    r"""把 IMAGE 的文件名（常是 ".\image1.jpg" 这种相对路径）解析成磁盘上的文件。
-
-    优先按图纸所在目录；找不到就大小写兜底。返回 None 表示没有这个文件。
-    """
+def _resolve_referenced_file(drawing_path, name):
+    r"""把实体引用的外部文件（IMAGE 的 ".\image.JPG"、UNDERLAY 的 "..\pdf-definition.pdf"
+    这类相对名）解析成磁盘上的文件：按图纸所在目录 normpath 归一化，找不到再大小写兜底。"""
     if not name:
         return None
     directory = os.path.dirname(os.path.abspath(drawing_path)) if drawing_path else os.getcwd()
-    cleaned = name.replace("\\", "/").lstrip("./")
-    for candidate in (cleaned, name):
-        path = os.path.join(directory, candidate)
-        if os.path.isfile(path):
-            return path
+    normalized = os.path.normpath(os.path.join(directory, name.replace("\\", "/")))
+    if os.path.isfile(normalized):
+        return normalized
     try:                                            # 大小写兜底（Windows 图常见）
+        basename = os.path.basename(normalized)
         for entry in os.listdir(directory):
-            if entry.lower() == os.path.basename(cleaned).lower():
+            if entry.lower() == basename.lower():
                 return os.path.join(directory, entry)
     except OSError:
         pass
     return None
+
+
+def _underlay_pdf(entity, drawing_path):
+    """把 UNDERLAY 引用的 PDF **第 1 页**渲染成像素，放进"插入点 + 比例×页面尺寸"的外框。
+
+    返回 ``(pixmap, corners)``；QtPdf 缺失 / 文件缺失 / 打不开 → None（调用方落回边界占位）。
+    """
+    import math
+
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtPdf import QPdfDocument
+
+    source = _resolve_referenced_file(drawing_path, entity.name)
+    if not source or not source.lower().endswith(".pdf"):
+        return None
+    document = QPdfDocument()
+    # PySide6 把 C++ 的 Error::None 暴露成 Error.None_（None 是 Python 关键字）
+    if document.load(source) != QPdfDocument.Error.None_:
+        return None
+    size = document.pagePointSize(0)                 # 页面尺寸（pt）
+    width, height = size.width(), size.height()
+    pixel_w = max(32, min(2000, round(width * 2)))   # ~144 DPI，封顶防撑爆内存
+    pixel_h = max(32, min(2000, round(height * 2)))
+    pixmap = QPixmap.fromImage(document.render(0, QSize(pixel_w, pixel_h)))
+    if pixmap.isNull() or width <= 0 or height <= 0:
+        return None
+    scale_x = entity.xscale or 1.0
+    scale_y = entity.yscale or 1.0
+    sine, cosine = math.sin(entity.rotation), math.cos(entity.rotation)
+    u = (width * scale_x * cosine, width * scale_x * sine)
+    v = (-height * scale_y * sine, height * scale_y * cosine)
+    c0 = entity.p1[:2] if entity.p1 else (0.0, 0.0)
+    return pixmap, (c0, u, v)
 
 
 def _placeholder_pixmap(label):
