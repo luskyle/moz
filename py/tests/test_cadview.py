@@ -293,6 +293,83 @@ def test_dwg_fit_is_not_blown_up_by_rays(cadview, qt_app):
     assert drawable.height() > 100
 
 
+def test_images_show_pixels_or_generated_placeholders(qt_app, tmp_path):
+    """IMAGE：找到图片文件就**真的载入像素**（画在外框里），找不到就**造一张占位图**。
+
+    `examples_dxf__image__images.dxf` 引用的 image1..4.jpg 语料里没有——以前只能画边框；
+    现在：缺图 → 64 张占位图（尺寸 = 各自的外框）+ 说明；补上文件 → 真像素，无说明。
+    """
+    import shutil
+
+    import moz_cadview as cadview
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QGraphicsPixmapItem
+
+    src = CORPUS / "ezdxf" / "examples_dxf__image__images.dxf"
+    if not src.exists():
+        pytest.skip("DXF 语料缺失")
+    dst = tmp_path / "images.dxf"
+    shutil.copy(src, dst)
+
+    def pixmap_items(scene):
+        return [item for item in scene.items() if isinstance(item, QGraphicsPixmapItem)]
+
+    cad = cadview.load(str(dst))
+    scene, _per, counts, _missing, notes = cadview.build_scene(cad)
+    assert counts.get("IMAGE", 0) >= 60
+    items = pixmap_items(scene)
+    assert len(items) >= 60
+    assert all(0 < item.sceneBoundingRect().width() < 40 for item in items)
+    assert any("占位图" in note for note in notes)
+
+    image = QImage(64, 48, QImage.Format_RGB32)
+    image.fill(QColor(200, 30, 30))                       # 左红
+    QPainter(image).fillRect(0, 0, 32, 48, QColor(30, 200, 30))   # 右绿
+    for name, fmt in (("image1.jpg", "JPG"), ("image2.png", "PNG"),
+                      ("image3.jpg", "JPG"), ("image4.jpg", "JPG")):
+        assert image.save(str(tmp_path / name), fmt), f"Qt 的 {name} 编解码器没工作"
+
+    cad = cadview.load(str(dst))
+    scene, _per, counts, _missing, notes = cadview.build_scene(cad)
+    items = pixmap_items(scene)
+    assert len(items) >= 60
+    assert not any("占位图" in note for note in notes), notes
+    pixel = items[0].pixmap().toImage().pixel(0, 0)
+    red, green = (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF
+    assert (red > 150 and green < 100) or (green > 150 and red < 100), \
+        f"载入的是真图片像素（强红或强绿）：#{pixel & 0xFFFFFF:06x}"
+
+
+def test_mouse_drag_pans_the_view(qt_app):
+    """看图区**左键拖动平移**：拖多远，内容跟多远（以前只配了 ScrollHandDrag，
+    图一旦恰好填满视口就没反应）。"""
+    import math
+
+    import moz_cadview as cadview
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    path = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if not path.exists():
+        path = DWGS / "libdxfrw" / "tests__fixtures__dwg__large_radial.dwg"
+    view = cadview.CadView(cadview.load(str(path)))
+    view.window.show()
+    qt_app.processEvents()
+    center = view.view.viewport().rect().center()
+    before = view.view.mapToScene(center)
+    QTest.mousePress(view.view.viewport(), Qt.LeftButton, pos=center)
+    for x, y in ((20, 0), (60, 30), (140, 90)):
+        QTest.mouseMove(view.view.viewport(), center + QPoint(x, y))
+        qt_app.processEvents()
+    QTest.mouseRelease(view.view.viewport(), Qt.LeftButton,
+                       pos=center + QPoint(140, 90))
+    qt_app.processEvents()
+    after = view.view.mapToScene(center)
+    assert math.hypot(after.x() - before.x(), after.y() - before.y()) > 10, \
+        "拖动后视口中心的场景点应该明显变了"
+    view.window.close()
+
+
 def test_window_actually_paints_the_drawing(qt_app, tmp_path):
     """窗口的绘图区要**真的有内容**（不是面板里有数字、画布上一片白）。
 

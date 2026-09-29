@@ -404,8 +404,29 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         return items
 
     scale_box = _drawing_extent(cad)
-    missing, notes = [], []
+    missing, notes, placeholders = [], [], []
     for entity, matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
+        if entity.kind == "IMAGE":
+            # 像素图：找到文件就真的载入（按图纸所在目录解析相对路径），找不到就画一张
+            # 灰底棋盘占位图——两种都(至少)画在正确的外框里；占位的在下面记一笔。
+            corners = _image_corners(entity)
+            if corners is None:
+                continue                             # 没有可放图的位置（尺寸 0）
+            source = _resolve_image_file(cad.path, entity.name)
+            loaded = False
+            if source:
+                from PySide6.QtGui import QPixmap
+                pixmap = QPixmap(source)
+                loaded = not pixmap.isNull()
+            if not loaded:
+                pixmap = _placeholder_pixmap(entity.name or "IMAGE")
+            item = _pixmap_item(pixmap, corners, matrix)
+            scene.addItem(item)
+            per_layer.setdefault(entity.layer, []).append(item)
+            counts[entity.kind] = counts.get(entity.kind, 0) + 1
+            if not loaded:
+                placeholders.append(source or entity.name or "IMAGE")
+            continue
         if entity.kind == "MLEADER":
             # 多重引线：文字 + 引线折线（内容块的实体已经由 iter_draw 展开）——算**一个**图元
             items = []
@@ -442,6 +463,10 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
                 # 一张画布会被那两组线撑成几万单位的空框，真实几何缩成几个像素
                 for item in items:
                     item.setData(_INFINITE_ROLE, True)
+    if placeholders:
+        names = sorted(set(placeholders))
+        shown = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+        notes.append(f"{len(placeholders)} 个 IMAGE 用了占位图（找不到图片文件：{shown}）")
     if not counts and not per_layer:
         _add_empty_notice(scene, missing, notes, dark, cad.warnings)
     return scene, per_layer, counts, missing, notes
@@ -483,6 +508,86 @@ def view_extent(scene):
     if rect.isValid() and rect.width() > 0 and rect.height() > 0:
         return rect
     return scene.itemsBoundingRect()
+
+
+def _image_corners(entity):
+    """IMAGE 外框 → (基准点 c0, U 向量, V 向量)。外框是 5 点闭环（c0, c0+U, c0+U+V, c0+V, c0）。"""
+    points = entity.loop_points()
+    if not points or len(points[0]) < 4:
+        return None
+    c0, c1, _c2, c3 = points[0][:4]
+    return c0, (c1[0] - c0[0], c1[1] - c0[1]), (c3[0] - c0[0], c3[1] - c0[1])
+
+
+def _resolve_image_file(drawing_path, name):
+    r"""把 IMAGE 的文件名（常是 ".\image1.jpg" 这种相对路径）解析成磁盘上的文件。
+
+    优先按图纸所在目录；找不到就大小写兜底。返回 None 表示没有这个文件。
+    """
+    if not name:
+        return None
+    directory = os.path.dirname(os.path.abspath(drawing_path)) if drawing_path else os.getcwd()
+    cleaned = name.replace("\\", "/").lstrip("./")
+    for candidate in (cleaned, name):
+        path = os.path.join(directory, candidate)
+        if os.path.isfile(path):
+            return path
+    try:                                            # 大小写兜底（Windows 图常见）
+        for entry in os.listdir(directory):
+            if entry.lower() == os.path.basename(cleaned).lower():
+                return os.path.join(directory, entry)
+    except OSError:
+        pass
+    return None
+
+
+def _placeholder_pixmap(label):
+    """图片文件缺失时生成的占位图：灰底棋盘 + 文件名，一眼能看出"这里缺图"。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+
+    size = 320, 240
+    pixmap = QPixmap(*size)
+    pixmap.fill(QColor(235, 235, 235))
+    painter = QPainter(pixmap)
+    cell = 20
+    for row in range(size[1] // cell):
+        for column in range(size[0] // cell):
+            if (row + column) % 2 == 0:
+                painter.fillRect(column * cell, row * cell, cell, cell,
+                                 QColor(215, 215, 225))
+    painter.setPen(QColor(120, 60, 60))
+    painter.drawLine(0, 0, size[0], size[1])
+    painter.drawLine(size[0], 0, 0, size[1])
+    painter.setPen(QColor(90, 60, 40))
+    painter.setFont(QFont("Sans Serif", 18, QFont.Bold))
+    label = os.path.basename(label).split("\n")[0] if label else "IMAGE"
+    painter.drawText(pixmap.rect().adjusted(8, size[1] // 2 - 20, -8, -8),
+                     Qt.AlignHCenter | Qt.AlignTop, f"缺图：{label}")
+    painter.end()
+    return pixmap
+
+
+def _pixmap_item(pixmap, corners, matrix):
+    """把像素图仿射映射进外框（c0 + U*x/w + V*y/h），再吃块变换的 matrix。
+
+    注意 PySide6 的 ``QTransform(a, b, c, d, e, f)`` 是 QMatrix 习惯：
+    (x,y) → (a*x + c*y + e, b*x + d*y + f)，所以参数是 (Ux/w, Uy/w, Vx/h, Vy/h, c0x, c0y)。
+    """
+    from PySide6.QtGui import QTransform
+    from PySide6.QtWidgets import QGraphicsPixmapItem
+
+    c0, u, v = corners
+    width = max(1, pixmap.width())
+    height = max(1, pixmap.height())
+    p0 = moz_cadio.matrix_apply(matrix, (c0[0], c0[1], 0.0))
+    p1 = moz_cadio.matrix_apply(matrix, (c0[0] + u[0], c0[1] + u[1], 0.0))
+    p3 = moz_cadio.matrix_apply(matrix, (c0[0] + v[0], c0[1] + v[1], 0.0))
+    item = QGraphicsPixmapItem(pixmap)
+    item.setTransform(QTransform((p1[0] - p0[0]) / width, (p1[1] - p0[1]) / width,
+                                 (p3[0] - p0[0]) / height, (p3[1] - p0[1]) / height,
+                                 p0[0], p0[1]))
+    return item
 
 
 def _drawing_extent(cad):
@@ -648,7 +753,8 @@ def _dropped_path(event):  # pragma: no cover - 需要 Qt
 
 
 def _make_view():  # pragma: no cover - 需要 Qt
-    """看图用的 QGraphicsView：**滚轮缩放**（以光标为锚点），左键拖动平移。"""
+    """看图用的 QGraphicsView：**滚轮缩放**（以光标为锚点），**左键拖动平移**。"""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QGraphicsView
 
     class CadGraphicsView(QGraphicsView):
@@ -656,6 +762,36 @@ def _make_view():  # pragma: no cover - 需要 Qt
             factor = 1.2 if event.angleDelta().y() >= 0 else 1.0 / 1.2
             self.scale(factor, factor)
             event.accept()
+
+        def mousePressEvent(self, event):
+            if event.button() == Qt.LeftButton:
+                self._drag_pos = event.position()
+                self.setCursor(Qt.ClosedHandCursor)
+                self._drag_anchor = self.transformationAnchor()
+                self.setTransformationAnchor(QGraphicsView.NoAnchor)
+                event.accept()
+                return
+            super().mousePressEvent(event)
+
+        def mouseMoveEvent(self, event):
+            pos = getattr(self, "_drag_pos", None)
+            if pos is not None:
+                delta = event.position() - pos
+                self._drag_pos = event.position()
+                self.translate(delta.x(), delta.y())      # 屏幕坐标拖动 → 内容跟手
+                event.accept()
+                return
+            super().mouseMoveEvent(event)
+
+        def mouseReleaseEvent(self, event):
+            if event.button() == Qt.LeftButton and getattr(self, "_drag_pos", None) is not None:
+                self._drag_pos = None
+                self.setCursor(Qt.OpenHandCursor)
+                self.setTransformationAnchor(getattr(self, "_drag_anchor",
+                                                     QGraphicsView.AnchorUnderMouse))
+                event.accept()
+                return
+            super().mouseReleaseEvent(event)
 
     return CadGraphicsView()
 
@@ -675,7 +811,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         view = _make_view()
         view.setRenderHint(QPainter.Antialiasing, False)
         view.scale(1.0, -1.0)                       # DXF 的 Y 向上，Qt 的 Y 向下
-        view.setDragMode(QGraphicsView.ScrollHandDrag)
+        view.setCursor(Qt.OpenHandCursor)            # 看得到就能拖（左键平移）
         view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         # QGraphicsView 默认用系统调色板的白色背景，而图纸颜色是按 dark 调色板配的——
         # 不设背景会把深色配色的浅色线画在白底上，整张图"看不见"（实测两个样本都这样）。

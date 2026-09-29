@@ -107,13 +107,14 @@ FLAG_MESH = 1 << 5
 FLAG_HAS_TEXT = 1 << 6
 FLAG_TITLE = 1 << 7
 FLAG_FIT_POINTS = 1 << 8    # SPLINE：points 是拟合点（上游没给控制点时的降级）
-# 画出来的是近似/占位（IMAGE 只有边框没有像素、UNDERLAY 只有裁剪边界、WIPEOUT 只有边界、
-# SHAPE 只有位置标记、HELIX 是 3D 实体的 2D 投影）——渲染层据此记一条说明，而不是当成完整几何
+# 画出来的是近似/占位（UNDERLAY 只有裁剪边界、WIPEOUT 只有边界、SHAPE 只有位置标记、
+# HELIX 是 3D 实体的 2D 投影；IMAGE 的像素由渲染层负责）——渲染层据此记一条说明，
+# 而不是当成完整几何
 FLAG_APPROX = 1 << 9
 
-# FLAG_APPROX 的实体"画了什么、缺了什么"——进 notes，让人一眼看出是近似而不是漏画
+# FLAG_APPROX 的实体"画了什么、缺了什么"——进 notes，让人一眼看出是近似而不是漏画。
+# （IMAGE 不在这张表里：读没读到像素由渲染层决定，见 iter_draw 里的说明。）
 APPROX_NOTES = {
-    "IMAGE": "按边框画的（位置/大小对；没载入图片像素）",
     "UNDERLAY": "只画了裁剪边界（外部 PDF/DGN/DWF 不渲染）",
     "WIPEOUT": "只画了裁剪边界（遮罩填充效果没有）",
     "SHAPE": "只标了插入点（字形在外部 .shx 文件里，本层不解释）",
@@ -907,12 +908,16 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
         if notes is not None and text not in notes:
             notes.append(text)
 
-    # 近似/占位画法的实体（IMAGE 只有边框、UNDERLAY 只有裁剪边界、SHAPE 只有位置标记…）：
-    # 逐条记进 notes，别让人以为画全了（理由表见 APPROX_NOTES）
+    # 近似/占位画法的实体（UNDERLAY 只有裁剪边界、SHAPE 只有位置标记…）：
+    # 逐条记进 notes，别让人以为画全了（理由表见 APPROX_NOTES）。
+    # IMAGE 不算：有没有读到像素是**渲染层**的事（它有图纸所在目录、能找图片文件），
+    # 由 `moz_cadview.build_scene` 决定是"载入像素"还是"占位图+说明"。
     approx = {}
     approx_names = {}
 
     def mark_approx(entity):
+        if entity.kind == "IMAGE":
+            return
         if entity.flags & FLAG_APPROX:
             approx[entity.kind] = approx.get(entity.kind, 0) + 1
             if entity.name:
