@@ -562,6 +562,8 @@ def _underlay_pdf(entity, drawing_path):
     """把 UNDERLAY 引用的 PDF **第 1 页**渲染成像素，放进"插入点 + 比例×页面尺寸"的外框。
 
     返回 ``(pixmap, corners)``；QtPdf 缺失 / 文件缺失 / 打不开 → None（调用方落回边界占位）。
+
+    PDF 的像素 y 向下、图纸场景 y 向上：渲染结果要**垂直翻转**再贴，否则整页倒着（文字镜像）。
     """
     import math
 
@@ -580,16 +582,21 @@ def _underlay_pdf(entity, drawing_path):
     width, height = size.width(), size.height()
     pixel_w = max(32, min(2000, round(width * 2)))   # ~144 DPI，封顶防撑爆内存
     pixel_h = max(32, min(2000, round(height * 2)))
-    pixmap = QPixmap.fromImage(document.render(0, QSize(pixel_w, pixel_h)))
-    if pixmap.isNull() or width <= 0 or height <= 0:
+    page = document.render(0, QSize(pixel_w, pixel_h))
+    if page.isNull() or width <= 0 or height <= 0:
         return None
+    pixmap = QPixmap.fromImage(page)
     scale_x = entity.xscale or 1.0
     scale_y = entity.yscale or 1.0
     sine, cosine = math.sin(entity.rotation), math.cos(entity.rotation)
     u = (width * scale_x * cosine, width * scale_x * sine)
     v = (-height * scale_y * sine, height * scale_y * cosine)
     c0 = entity.p1[:2] if entity.p1 else (0.0, 0.0)
-    return pixmap, (c0, u, v)
+    # PDF 像素 y 向下、图纸场景 y 向上：外框起点放在页面**顶上**、v 反掉，
+    # 于是像素第 0 行（页面上边）对准世界"上"边、最后一行落在插入点（页面下边）。
+    # （不用 QImage.mirrored —— Qt6 里它已弃用；效果由变换承担。）
+    top_left = (c0[0] + v[0], c0[1] + v[1])
+    return pixmap, (top_left, u, (-v[0], -v[1]))
 
 
 def _placeholder_pixmap(label):
@@ -969,6 +976,8 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         drawings.setUniformRowHeights(True)
         drawings.setSelectionMode(QAbstractItemView.SingleSelection)
         drawings.setFocusPolicy(Qt.StrongFocus)
+        # 底部留 4px 内边距：最后一行顶到面板底边时不会被裁掉一半
+        drawings.setViewportMargins(0, 0, 0, 4)
         drawings.itemClicked.connect(self._on_drawing_clicked)
         drawings.currentItemChanged.connect(self._on_drawing_activated)
         layers = QListWidget()                      # 图层开关
@@ -1177,8 +1186,9 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
                 self.drawings.blockSignals(True)
                 self.drawings.setCurrentItem(item)
                 self.drawings.blockSignals(False)
-                # 居中滚到当前项：以前名单排列表里"最后一行被裁掉一半"就是没给它留空间
-                self.drawings.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                # 只滚到"刚好看得见"：可见就不动。以前用居中，每换一张列表就跳一次，
+                # 鼠标按顺序点图纸时点中的是"记忆里的位置"而不是屏幕上的那行 → 跳图。
+                self.drawings.scrollToItem(item, QAbstractItemView.EnsureVisible)
                 return True
             for i in range(item.childCount()):
                 if walk(item.child(i)):

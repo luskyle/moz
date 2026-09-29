@@ -413,6 +413,50 @@ def test_underlay_pdf_is_rendered_onto_the_page(qt_app, tmp_path):
     assert any("UNDERLAY 只画了占位" in note and "pdf-definition" in note for note in notes)
 
 
+def test_pdf_page_is_not_upside_down(qt_app):
+    """渲染的 PDF 页必须**正着**贴在外框里——PDF 像素 y 向下、图纸 y 向上。
+
+    实测没处理时整页倒着、文字镜像。现在外框起点放在页面顶上、v 反掉：
+    像素第 0 行（页面上边）对准世界"上"边；最后一行落在插入点（页面下边）。
+    """
+    import moz_cadview as cadview
+
+    path = DWGS / "acadsharp" / "samples__sample_AC1021.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    cad = cadview.load(str(path))
+    underlay, = cad.by_kind("UNDERLAY")
+    pixmap, corners = cadview._underlay_pdf(underlay, str(path))
+    assert pixmap is not None
+
+    c0 = underlay.p1[:2]                       # scale=(1,1)、rotation=0、页面 595×842 pt
+    assert corners[1] == (595.0, 0.0)          # u：宽沿 +x
+    assert corners[2] == (0.0, -842.0)         # v：反掉 → 像素向下 = 世界向下
+    assert corners[0] == (c0[0], c0[1] + 842.0)   # 起点在页面**顶上**（页面上边对准世界"上"边）
+    # 用外框造出来的 item：最后一个像素行（页面下边）必须落在插入点 c0 上
+    item = cadview._pixmap_item(pixmap, corners, cadview.moz_cadio.IDENTITY_MATRIX)
+    bottom_edge = item.mapToScene(0, item.boundingRect().height())
+    assert abs(bottom_edge.x() - c0[0]) < 1e-6 and abs(bottom_edge.y() - c0[1]) < 1e-6
+
+
+def test_switching_drawings_does_not_jump_the_list(qt_app, tmp_path):
+    """鼠标按顺序点图纸时，列表**不能跳**——可见项再换图不该滚动。
+
+    以前选中即"居中滚动"，每点一张列表就跳一次，点中的是记忆里的位置 → 跳图。
+    """
+    import moz_cadview as cadview
+
+    for index in range(30):
+        shutil.copy(DRAWINGS / "plate.dxf", tmp_path / f"d{index:02d}.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "d00.dxf")), recursive=True)
+    view.warn_on_error = False
+    scrollbar = view.drawings.verticalScrollBar()
+    before = scrollbar.value()                      # 第一张在顶部：值应为 0
+    assert before == 0
+    assert view.open_path(str(tmp_path / "d01.dxf")) is True
+    assert scrollbar.value() == before, "第一行可见时换第二张不该滚动列表（不然点一个跳一个）"
+
+
 def test_mouse_drag_pans_the_view(qt_app):
     """看图区**左键按住拖动 ≡ 内容跟手**（1:1，放大后也一样跟）。
 
