@@ -51,7 +51,12 @@ void DRW_TextCodec::setVersion(DRW::Version v, bool dxfFormat){
         {
             version = DRW::AC1009;
             cp = "ANSI_1252";
-            setCodePage( cp, dxfFormat);
+            /* moz 补丁：R12 及更早的 DXF **只有**码页字节（那个时代没有 UTF-8 编码的 DXF），
+             * 而 setCodePage("ANSI_1252", dxf=true) 没有对应的表分支、会落进"当成 UTF-8 原样
+             * 过"的普通转换器——实测 0xC4 0xDC 0xD6（ÄÜÖ）变 U+FFFD，而且它把高字节当 UTF-8
+             * 前导、吞掉后面 `\U+` 转义的第一个反斜杠（同一串里 3 个转义只解出 2 个）。
+             * 这里直接装 cp1252 表，字节按码页解、`\U+XXXX` 转义照常解。 */
+            conv.reset(new DRW_ConvTable(DRW_Table1252, CPLENGTHCOMMON));
             break;
         }
 

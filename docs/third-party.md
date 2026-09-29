@@ -88,6 +88,12 @@
     所以是我们的绘制路径没问题、是 DWG 那份数据源缺。记在 `docs/roadmap.md`。
 - **还没画的**：SURFACE（曲面）与代理实体（上游不解其几何）——仍然**计数报出来**，不静默；
   SHAPE 的字形、IMAGE 的像素、PDF/DGN/DWF 底图内容都需要外部文件/字体，本层不解释（画占位并说明）。
+- **R12 及更早的 DXF 按码页解字（moz 补丁）**：`DRW_TextCodec::setVersion` 对 AC1006/AC1009 现在
+  **直接装 cp1252 表转换器**。原代码 `setCodePage("ANSI_1252", dxf=true)` 没有 1252 的表分支、
+  落到"当成 UTF-8 原样过"的普通转换器——实测 `integration_tests__data__ASCII_R12.dxf` 的
+  0xC4/0xDC/0xD6（ÄÜÖ）变成 U+FFFD，而且高字节被当 UTF-8 前导，把后面 `\U+` 转义的第一个反斜杠
+  "吞掉"（同串 3 个转义只解出 2 个，留下字面 `\U+03B1`）。现在字节按码页解、`\U+XXXX` 全解：
+  `ABCÄÜÖαβγ`、图层 `ΛΑΓΕΡÄÜÖ`（R12 时代没有 UTF-8 编码的 DXF，按码页是唯一正确解）。
 - 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
   `screw2012binary.dxf`（对象段两个版本都读不了：0.5.11 报 `BAD_READ_SECTION`、2.0.0 报
   `BAD_READ_OBJECTS`；ezdxf 读它没问题）、`nothing-decimal-comma-separated.dxf`（小数逗号，

@@ -368,6 +368,22 @@ def test_hatch_spline_edges_are_sampled_like_spline_entities(cadio):
         "样条边已经采样了，不该再有'这截是空的'的通知"
 
 
+def test_r12_legacy_codepage_text_decodes(cadio):
+    r"""R12 时代的 DXF **只有码页字节**（没有 $DWGCODEPAGE 也按 ANSI_1252 解），`\U+XXXX` 转义要全解。
+
+    实测 ezdxf 的 `integration_tests__data__ASCII_R12.dxf`：0xC4/0xDC/0xD6 是 ÄÜÖ，
+    `\U+03B1..\U+03B3` 是希腊字母。修复前：高字节被当 UTF-8 解成 U+FFFD，而且"UTF-8 前导"
+    判断会吞掉后面 `\U+` 转义的第一个反斜杠（同串 3 个转义只解出 2 个、留下字面 `\U+03B1`）。
+    """
+    path = CORPUS / "ezdxf" / "integration_tests__data__ASCII_R12.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    cad = cadio.read(str(path))
+    assert [e.text for e in cad.entities if e.kind == "TEXT"] == ["ABCÄÜÖαβγ"]
+    assert "ΛΑΓΕΡÄÜÖ" in [layer.name for layer in cad.layers]
+    assert all("\ufffd" not in (entity.text or "") for entity in cad.entities)
+
+
 def test_helix_is_drawn_from_axis_and_turns(cadio, tmp_path):
     """HELIX（螺旋）：上游给了轴基点/起点/轴向量/半径/圈数，按它采样成折线画出来。
 
