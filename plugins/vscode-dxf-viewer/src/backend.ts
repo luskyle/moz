@@ -17,9 +17,13 @@ function libName(): string {
 
 /**
  * 找出渲染后端的 py/ 目录（含 moz_cadview.py / moz_cadio.py）。
- * 顺序：设置 > 工作区里的仓库根 > 扩展所在仓库（开发模式 F5 即工作）。
+ * 顺序：扩展自带 python/（打进 vsix，装好即用）> 设置 > 工作区里的仓库根 > 开发路径。
  */
 export function findPyDir(context: vscode.ExtensionContext): string | undefined {
+  const bundled = path.join(context.extensionPath, 'python');
+  if (fs.existsSync(path.join(bundled, 'moz_cadview.py'))) {
+    return bundled;
+  }
   const configured = vscode.workspace
     .getConfiguration('mozDxfViewer')
     .get<string>('backendPyDir', '');
@@ -39,13 +43,19 @@ export function findPyDir(context: vscode.ExtensionContext): string | undefined 
   return undefined;
 }
 
-/** 已构建的 libmozcadio.so 路径（build/lib 或随包位置） */
+/** 已构建的 libmozcadio.so 路径（扩展自带 python/moz_data/lib，或仓库 build/lib） */
 export function findLibSo(pyDir: string): string | undefined {
   const candidates = [
-    path.join(pyDir, '..', 'build', 'lib', libName()),
     path.join(pyDir, 'moz_data', 'lib', libName()),
+    path.join(pyDir, '..', 'build', 'lib', libName()),
+    path.join(pyDir, libName()),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+/** 当前 pyDir 是否是扩展自带的 python/ 目录 */
+export function isBundledBackend(context: vscode.ExtensionContext, pyDir: string): boolean {
+  return path.resolve(pyDir) === path.resolve(path.join(context.extensionPath, 'python'));
 }
 
 /** 跑一个子进程；非零退出码抛错（带 stderr）。 */
@@ -72,7 +82,7 @@ function run(
   });
 }
 
-/** 编译 libmozcadio.so（第一次要一两分钟；里面有 cmake + g++ 就行） */
+/** 编译 libmozcadio.so（第一次要一两分钟；里面有 cmake + g++ 就行；仅"用仓库后端"时需要） */
 export async function buildBackend(pyDir: string): Promise<void> {
   const repoRoot = path.dirname(pyDir);
   const script = path.join(repoRoot, 'scripts', 'build_moz_cadio.sh');
@@ -83,36 +93,25 @@ export async function buildBackend(pyDir: string): Promise<void> {
 }
 
 /**
- * 把一张 DXF/DWG 导出成 **浅色 SVG**（黑线白底，Webview 里最易读）。
- * 通过 `python -m moz_cadview <图> --export-svg <临时文件> --light` 实现；
- * 需要 PySide6 与已构建的 libmozcadio.so，都在 README 里写清了。
+ * 把一张 DXF/DWG 摊平成 **可交互图元 JSON**（图元折线 + 文字，颜色/线型已算好）。
+ * 通过 `python -m moz_cadview <图> --model-json <临时文件>` 实现——纯 Python + .so，
+ * **不需要 PySide6**；扩展自带后端的打包布局就是 python/（见 scripts/bundle-backend.sh）。
  */
-export async function exportSvg(pyDir: string, drawingPath: string): Promise<string> {
+export async function dumpModel(pyDir: string, drawingPath: string): Promise<string> {
   const interpreter = vscode.workspace
     .getConfiguration('mozDxfViewer')
     .get<string>('python', 'python3');
   const soFile = findLibSo(pyDir);
-  const tmpSvg = path.join(os.tmpdir(), `moz-dxf-view-${Date.now()}.svg`);
-  const args = [
-    '-m',
-    'moz_cadview',
-    drawingPath,
-    '--export-svg',
-    tmpSvg,
-    '--light',
-    '--width',
-    '1800',
-    '--height',
-    '1400',
-  ];
-  const env: NodeJS.ProcessEnv = { ...process.env, QT_QPA_PLATFORM: 'offscreen' };
+  const tmpJson = path.join(os.tmpdir(), `moz-model-${Date.now()}.json`);
+  const args = ['-m', 'moz_cadview', drawingPath, '--model-json', tmpJson];
+  const env: NodeJS.ProcessEnv = { ...process.env };
   if (soFile) {
     env.MOZ_CADIO_LIB = soFile;
   }
   try {
     await run(interpreter, args, pyDir, env);
-    return await fs.promises.readFile(tmpSvg, 'utf-8');
+    return await fs.promises.readFile(tmpJson, 'utf-8');
   } finally {
-    await fs.promises.rm(tmpSvg, { force: true });
+    await fs.promises.rm(tmpJson, { force: true });
   }
 }

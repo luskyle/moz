@@ -138,6 +138,44 @@ def test_linetype_patterns(cadview):
     assert cadview.linetype_pattern("不认识的线型") is None
 
 
+# --- model_as_json（VS Code 插件的可交互 JSON 通路，纯 Python、不碰 Qt） ---
+
+
+def test_model_as_json_uses_same_geometry_and_colour(cadview):
+    """`--model-json`：可交互 JSON 与 Qt 看图器共用同一套几何/颜色口径。
+
+    图元带算好的 #rrggbb 颜色、可选 points/closed/text/pos/h/rot；layers 是出现顺序；
+    模块层不 import PySide6（纯函数，直接调得起）。
+    """
+    import moz_cadview
+
+    header = open(moz_cadview.__file__, encoding="utf-8").read().split("def ")[0]
+    assert "PySide6" not in header, "模块层不得 import PySide6（--model-json 是纯 Python 通路）"
+    model = cadview.model_as_json(cadview.load(str(DRAWINGS / "plate.dxf")))
+    assert model["format"] == "dxf"
+    assert model["layers"] and model["items"]
+    assert model["layers"] == list(dict.fromkeys(it["layer"] for it in model["items"]))
+    for item in model["items"]:
+        assert item["color"].startswith("#") and len(item["color"]) == 7
+        assert (item.get("points") is not None) or (item.get("text") is not None)
+    line = next(item for item in model["items"] if item["kind"] == "LINE")
+    assert len(line["points"]) >= 4            # 至少一条线段（x0,y0,x1,y1）
+    texts = [item for item in model["items"] if item.get("text")]
+    assert texts, "plate.dxf 有标注文字（bodywidth/plateheight）"
+    for text in texts:
+        assert len(text["pos"]) == 2 and text["h"] > 0
+        assert isinstance(text["rot"], int | float)
+
+
+def test_model_as_json_line_colour_follows_layer(cadview):
+    """浅色模型：BYLAYER 的 7 号色实体 = 黑线 #000000（Webview 浅底上可见）。"""
+    model = cadview.model_as_json(cadview.load(str(DRAWINGS / "bracket.dxf")))
+    by_layer = [item for item in model["items"]
+                if item["kind"] in ("LINE", "ARC") and item["layer"] == "OUTLINE"]
+    assert by_layer and all(item["color"] == "#000000" for item in by_layer)
+    assert any(item["color"] != "#000000" for item in model["items"])   # 别的层有颜色
+
+
 # --- 场景装配 ---
 
 

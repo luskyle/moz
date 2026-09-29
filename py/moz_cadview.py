@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -28,7 +29,7 @@ import sys
 import moz_cadio
 
 __all__ = ["AciTable", "CadView", "build_scene", "describe", "export", "load",
-           "linetype_pattern", "main", "resolve_colour"]
+           "linetype_pattern", "main", "model_as_json", "resolve_colour"]
 
 # 无限长线（RAY/XLINE）item 的标记：适应视角与导出时把它排除（它们按图纸尺度放大 20 倍，
 # 不排除的话场景框会被撑成几万单位，真实几何缩成几个像素——用户看到的就是空白画布）。
@@ -128,6 +129,62 @@ def resolve_colour(entity, layer, aci_table):
     elif index == moz_cadio.BYBLOCK:
         index = 7
     return aci_table.rgb(index)
+
+
+def model_as_json(cad):
+    """把规范化模型摊平成 Webview **可交互**的 JSON（图元折线 + 文字，颜色按浅色方案算好）。
+
+    纯 Python（不碰 Qt）：入口是 ``python -m moz_cadview 图.dwg --model-json out.json``，
+    VS Code 插件的交互图纸后台走这里。几何/颜色复用与 Qt 看图器**同一套函数**
+    （``entity_polylines`` / ``resolve_colour`` / ``linetype_pattern`` / ``mtext_to_display``），
+    不出现两套口径。返回：
+
+    ``{"format", "version", "units", "layers": [...], "items": [{layer, kind, color, fill,
+    dash, closed, points:[x0,y0,…], text/pos/h/rot 可选}]}``
+    """
+    aci = AciTable(background_dark=False)                 # 浅色：黑线白底
+    layer_map = cad.layer_map()
+    layers_seen: list[str] = []
+    items: list[dict] = []
+    for entity, matrix in moz_cadio.iter_draw(cad):
+        layer = entity.layer
+        if layer not in layers_seen:
+            layers_seen.append(layer)
+        red, green, blue = resolve_colour(entity, layer_map.get(layer), aci)
+        item: dict = {
+            "layer": layer,
+            "kind": entity.kind,
+            "color": f"#{red << 16 | green << 8 | blue:06x}",
+            "fill": entity.kind in ("SOLID", "TRACE", "3DFACE")
+                    or (entity.kind == "HATCH" and entity.solid),
+        }
+        pattern = linetype_pattern(
+            entity.linetype or (layer_map[layer].linetype if layer in layer_map else None))
+        item["dash"] = list(pattern) if pattern else None
+        if entity.kind in ("TEXT", "MTEXT") or (entity.kind == "MLEADER" and entity.text):
+            text = mtext_to_display(entity.text or "").split("\n")[0]
+            if text and entity.p1:
+                position = moz_cadio.matrix_apply(matrix, entity.p1)
+                turn = math.atan2(matrix[3], matrix[0])   # 块变换带来的旋转
+                item.update({"text": text, "pos": [position[0], position[1]],
+                             "h": entity.height or 2.5, "rot": entity.rotation + turn})
+        flat: list[float] = []
+        for chain in moz_cadio.entity_polylines(entity):
+            for x, y in chain:
+                world = moz_cadio.matrix_apply(matrix, (x, y, 0.0))
+                flat.extend((world[0], world[1]))
+        if flat:
+            item["points"] = flat
+            item["closed"] = bool(entity.closed)
+        if item.get("text") is not None or item.get("points") is not None:
+            items.append(item)
+    return {
+        "format": cad.format,
+        "version": cad.version,
+        "units": cad.units_name,
+        "layers": layers_seen,
+        "items": items,
+    }
 
 
 def load(path):
@@ -1328,6 +1385,8 @@ def main(argv=None):
                         help="逐张体检：读得通 / 画不出东西 / 打不开，并列出原因（无窗口，排查用）")
     parser.add_argument("--export-png", metavar="PATH", help="导出 PNG（无窗口）")
     parser.add_argument("--export-svg", metavar="PATH", help="导出 SVG（无窗口）")
+    parser.add_argument("--model-json", metavar="PATH",
+                        help="导出 Webview 可交互的图元 JSON（无窗口、**不需要 PySide6**）")
     parser.add_argument("--width", type=int, default=1600, help="导出宽度（默认 1600）")
     parser.add_argument("--height", type=int, default=1200, help="导出高度（默认 1200）")
     parser.add_argument("--light", action="store_true", help="浅色背景")
@@ -1368,6 +1427,14 @@ def main(argv=None):
         return 0
     if args.layers:
         print(_layer_table(cad))
+        return 0
+
+    if args.model_json:
+        model = model_as_json(cad)
+        with open(args.model_json, "w", encoding="utf-8") as handle:
+            json.dump(model, handle, ensure_ascii=False)
+        print(f"已导出 {args.model_json}（{len(cad.entities)} 个实体，"
+              f"{len(model['items'])} 个图元）")
         return 0
 
     if args.export_png or args.export_svg or args.stats:

@@ -25,9 +25,19 @@ jobs:
       - name: npm run compile
         working-directory: plugins/vscode-dxf-viewer
         run: npm run compile
-      - name: 打成 vsix
+      - name: 编 libmozcadio.so 并打成 vsix（自带后端进包）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++
+          bash scripts/build_moz_cadio.sh
+          cd plugins/vscode-dxf-viewer
+          npm run bundle-backend
+          npx vsce package --no-dependencies --out moz-dxf-viewer.vsix
+      - name: 校验 vsix 内置 python/ + .so
         working-directory: plugins/vscode-dxf-viewer
-        run: npx vsce package --no-dependencies --out moz-dxf-viewer.vsix
+        run: |
+          unzip -l moz-dxf-viewer.vsix | grep -q 'extension/python/moz_data/lib/libmozcadio.so'
+          echo "vsix 已带自带后端"
 
       - name: 挂到 GitHub Release（tag 自动建）
         uses: softprops/action-gh-release@v2

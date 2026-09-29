@@ -19,9 +19,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## 它调用的后端（不是本扩展的代码）
+## vsix 内置的渲染后端（GPLv2-or-later）
 
-扩展运行时调用 moz 仓库的 Python 渲染后端（`py/moz_cadview.py`、`py/moz_cadio.py` +
-`libmozcadio.so`）。该后端链接了 **libdxfrw（GPLv2-or-later）**，因此 `libmozcadio.so`
-是 **GPL 派生物**——对外分发/服务化时要过 GPL 的条款（详见仓库 `docs/third-party.md`；
-本扩展只是**调用进程外的命令**，不把这段代码打进 vsix，也不改它的许可）。
+从 0.2.0 起，**vsix 随包分发后端**：`python/moz_cadio.py`、`python/moz_cadview.py`
+（Apache-2.0，同本扩展）与 `python/moz_data/lib/libmozcadio.so`。`.so` 链接了
+**libdxfrw（GPLv2-or-later）**，因此是 **GPL 派生物**——随 vsix 分发它触发 GPLv2-or-later
+的对应义务：
+
+- 对收到 vsix 的最终用户，须能取得 `.so` 对应源码：moz 仓库的 `3rd/libdxfrw/moz/`
+  实现与上游 libdxfrw（https://github.com/LibreCAD/libdxfrw ）即为其源码，
+  仓库 `scripts/build_moz_cadio.sh` 是构建脚本（也随 vsix 内 README 指向本仓库）；
+- 扩展本体（TS/Webview/纯 Python 后端）仍按 Apache-2.0，与 GPL 组件以独立文件分发，
+  互不复用代码。详见仓库 `docs/third-party.md`。

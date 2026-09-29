@@ -1,14 +1,14 @@
-/* Moz DXF/DWG Viewer —— Webview 样式。随 VS Code 主题走底色，图纸本身用浅色导出（黑线白底）。 */
+/* Moz DXF/DWG Viewer —— Webview 样式。随 VS Code 主题走底色；图纸按浅色模型画（黑线白底）。 */
 html,
 body {
   height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 #stage {
   position: absolute;
   inset: 0;
-  overflow: hidden;
   background: var(--vscode-editor-background);
   cursor: grab;
 }
@@ -17,26 +17,85 @@ body {
   cursor: grabbing;
 }
 
-#art {
+#canvas {
   position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: 0 0;
-  will-change: transform;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
-#art svg {
-  display: block;
-  background: #ffffff;
-  box-shadow: 0 2px 18px rgba(0, 0, 0, 0.45);
+#layers {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 150px;
+  max-width: 260px;
+  max-height: 62%;
+  overflow: auto;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-widget-border, #454545);
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  z-index: 10;
+}
+
+.layers-head {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.layers-head button {
+  font-size: 11px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  background: var(--vscode-button-secondaryBackground, #3a3d41);
+  color: var(--vscode-button-secondaryForeground, #cccccc);
+  border-radius: 2px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layer-row:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+#tooltip {
+  position: fixed;
+  display: none;
+  pointer-events: none;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-widget-border, #454545);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  padding: 2px 8px;
+  z-index: 20;
 }
 
 #status {
   position: absolute;
   left: 10px;
-  bottom: 8px;
+  bottom: 6px;
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
   color: var(--vscode-foreground);
   user-select: none;
   pointer-events: none;
@@ -46,7 +105,7 @@ body {
 #hint {
   position: absolute;
   right: 10px;
-  bottom: 8px;
+  bottom: 6px;
   font-size: 11px;
   opacity: 0.55;
   color: var(--vscode-foreground);

@@ -1,8 +1,8 @@
 {
   "name": "moz-dxf-viewer",
   "displayName": "Moz DXF/DWG Viewer",
-  "description": "在 VS Code 里直接查看 DXF/DWG 图纸 —— 复用 moz 仓库的 libdxfrw 渲染后端（真曲线/剖面线/块/标注/图层），Webview 里滚轮缩放、拖动平移。",
-  "version": "0.1.0",
+  "description": "在 VS Code 里直接查看 DXF/DWG 图纸：点击文件即打开，**可交互的原始图纸**（图层开关、悬停看图层/点选看图元、滚轮缩放、拖动平移）。自带 libdxfrw 渲染后端（.so + Python），装好即用。",
+  "version": "0.2.0",
   "publisher": "luskyle",
   "license": "Apache-2.0",
   "engines": {
@@ -12,7 +12,7 @@
     "Visualization",
     "Other"
   ],
-  "keywords": ["dxf", "dwg", "librecad", "libdxfrw", "cad"],
+  "keywords": ["dxf", "dwg", "librecad", "libdxfrw", "cad", "visualization"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -20,6 +20,17 @@
         "command": "mozDxfViewer.show",
         "title": "Moz: 查看 DXF/DWG 图纸",
         "icon": "$(preview)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "mozDxfViewer.editor",
+        "displayName": "Moz DXF/DWG 图纸",
+        "selector": [
+          { "filenamePattern": "*.dxf" },
+          { "filenamePattern": "*.dwg" }
+        ],
+        "priority": "default"
       }
     ],
     "menus": {
@@ -43,17 +54,17 @@
         "mozDxfViewer.python": {
           "type": "string",
           "default": "python3",
-          "description": "跑渲染后端的 Python 解释器（需要 PySide6）。Windows 上可填 python.exe 的完整路径。"
+          "description": "跑渲染后端的 Python 解释器（仅 Python 3.8+ 即可，无需 PySide6）。Windows 上可填 python.exe 的完整路径。"
         },
         "mozDxfViewer.backendPyDir": {
           "type": "string",
           "default": "",
-          "description": "moz 仓库的 py/ 目录（含 moz_cadview.py / moz_cadio.py）。留空时自动探测：工作区里的仓库根，或扩展所在仓库。"
+          "description": "换成仓库的 py/ 目录时指定（开发/想用最新代码时）。留空：优先用扩展自带的 python/（含 .so）。"
         },
         "mozDxfViewer.buildBackend": {
           "type": "boolean",
           "default": true,
-          "description": "libmozcadio.so 不存在时自动跑 `scripts/build_moz_cadio.sh`（首次要编译，约 1-2 分钟）。"
+          "description": "用仓库后端时，libmozcadio.so 缺失自动跑 `scripts/build_moz_cadio.sh`（首次约 1-2 分钟）。"
         }
       }
     }
@@ -61,7 +72,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package --no-dependencies"
+    "bundle-backend": "bash scripts/bundle-backend.sh",
+    "package": "npm run bundle-backend && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20",
