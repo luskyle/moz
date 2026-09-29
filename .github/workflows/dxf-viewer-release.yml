@@ -11,10 +11,28 @@ permissions:
 
 jobs:
   release:
-    # 构建 .so 的 glibc 基线 = 2.35（ubuntu-22.04）。ubuntu-latest(24.04) 编出的
-    # .so 会要求 GLIBC_2.38，装到旧系统（实测本机 2.35）直接加载失败——构建环境
-    # 必须保守：目标是"兼容 glibc ≥ 构建机 glibc"的机器。
-    runs-on: ubuntu-22.04
+    # 平台矩阵：每个平台构建自己的 libmozcadio 动态库（.so/.dylib/.dll）并打进
+    # 各自平台后缀的 vsix，全部挂到 GitHub Release 供按平台下载。
+    # Linux 用 ubuntu-22.04 守住 glibc 2.35 兼容基线（ubuntu-latest=24.04 编出的
+    # .so 要求 GLIBC_2.38，装到 22.04 系机器会加载失败——0.2.2 上线时就炸过）。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            lib_file: libmozcadio.so
+            python: python3
+            publish_marketplace: true
+          - os: macos-latest
+            platform: darwin
+            lib_file: libmozcadio.dylib
+            python: python3
+          - os: windows-latest
+            platform: win32
+            lib_file: mozcadio.dll
+            python: python
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,44 +47,66 @@ jobs:
       - name: TypeScript compile
         working-directory: plugins/vscode-dxf-viewer
         run: npm run compile
-      - name: Build C backend and package the vsix (bundled backend in)
+      - name: Install build tools (Linux only)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq cmake g++
+      - name: Build the platform backend and package the platform vsix
+        shell: bash
+        run: |
           bash scripts/build_moz_cadio.sh
           cd plugins/vscode-dxf-viewer
-          npm run package
-      - name: Verify vsix carries python/, .so and icon.png
+          npm run bundle-backend
+          npx vsce package --no-dependencies --out "moz-dxf-viewer-${{ matrix.platform }}.vsix"
+      - name: Verify the vsix carries the platform backend and icon
+        shell: bash
         working-directory: plugins/vscode-dxf-viewer
         run: |
-          test -n "$(ls *.vsix)" || (echo 'vsix not produced' && exit 1)
-          unzip -l *.vsix | grep -q 'extension/python/moz_data/lib/libmozcadio.so'
-          unzip -l *.vsix | grep -q 'extension/icon.png'
-          echo 'vsix carries the bundled backend and icon'
+          test -n "$(ls moz-dxf-viewer-${{ matrix.platform }}.vsix)" \
+            || (echo 'vsix not produced' && exit 1)
+          unzip -l "moz-dxf-viewer-${{ matrix.platform }}.vsix" \
+            | grep -q "extension/python/moz_data/lib/${{ matrix.lib_file }}"
+          unzip -l "moz-dxf-viewer-${{ matrix.platform }}.vsix" \
+            | grep -q 'extension/icon.png'
+          echo "vsix carries the bundled backend (${{ matrix.lib_file }}) and icon"
+      - name: Smoke the bundled backend from the unpacked vsix
+        shell: bash
+        run: |
+          mkdir -p /tmp/vsix
+          unzip -q -o "plugins/vscode-dxf-viewer/moz-dxf-viewer-${{ matrix.platform }}.vsix" -d /tmp/vsix
+          PYTHONPATH=/tmp/vsix/extension/python \
+          MOZ_CADIO_LIB=/tmp/vsix/extension/python/moz_data/lib/${{ matrix.lib_file }} \
+          ${{ matrix.python }} -m moz_cadview corpus/dxf/three-dxf/sample__data__demo.dxf \
+            --model-json /tmp/model.json
+          ${{ matrix.python }} - <<'EOF'
+          import json
+          data = json.load(open('/tmp/model.json'))
+          assert data['items'] and data['layers'], 'empty model'
+          print(f"smoke OK: {len(data['layers'])} layers, {len(data['items'])} items (bundled backend)")
+          EOF
 
-      # The tag push auto-creates the GitHub Release; attach the vsix there so
-      # manual installs stay possible even without a Marketplace token.
+      # The tag push auto-creates the GitHub Release; attach each platform's
+      # vsix there so manual installs work on every OS.
       - name: Attach vsix to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: plugins/vscode-dxf-viewer/moz-dxf-viewer-*.vsix
+          files: plugins/vscode-dxf-viewer/moz-dxf-viewer-${{ matrix.platform }}.vsix
           generate_release_notes: true
 
-      # Marketplace publishing follows the official pattern: the deploy script
-      # (package.json) contains no token.  The secrets context is NOT allowed
-      # inside `if:`, so the token is read into a step env first and its
-      # presence is reported via step output; "no token -> skip" is decided on
-      # that output.  The encrypted secret is named LUSKYLE (Settings ->
-      # Secrets and variables -> Actions) and holds a VS Code Marketplace PAT
-      # from the Azure DevOps tokens page (publisher luskyle).
+      # Marketplace publishing: one package per version, so publish the primary
+      # (Linux) build only.  The deploy script (package.json) contains no token;
+      # the secrets context is not allowed inside if:, so token presence is
+      # detected via step env + output.  The encrypted secret is named LUSKYLE.
       - name: Detect Marketplace token
+        if: matrix.publish_marketplace
         id: has_token
         env:
           VSCE_PAT: ${{ secrets.LUSKYLE }}
         run: |
           if [ -n "$VSCE_PAT" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
       - name: Publish to VS Code Marketplace
-        if: ${{ success() && startsWith(github.ref, 'refs/tags/') && steps.has_token.outputs.present == 'true' }}
+        if: ${{ matrix.publish_marketplace && success() && startsWith(github.ref, 'refs/tags/') && steps.has_token.outputs.present == 'true' }}
         working-directory: plugins/vscode-dxf-viewer
         run: npm run deploy
         env:

@@ -30,6 +30,7 @@ from __future__ import annotations
 import ctypes
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 
 __all__ = [
@@ -256,23 +257,35 @@ class _CBlock(ctypes.Structure):
 _lib = None
 
 
+def _lib_names():
+    """本平台动态库的文件名（插件/webview 的 backend.ts 与它保持一致）。"""
+    if os.name == "nt":
+        return ["mozcadio.dll"]
+    if sys.platform == "darwin":
+        return ["libmozcadio.dylib", "libmozcadio.so"]   # darwin 也认 .so 兜底
+    return ["libmozcadio.so"]
+
+
 def _candidate_libs():
     here = os.path.dirname(os.path.abspath(__file__))
-    return [
-        os.environ.get("MOZ_CADIO_LIB") or "",
-        os.path.join(here, "libmozcadio.so"),
-        os.path.join(here, os.pardir, "build", "lib", "libmozcadio.so"),
-        os.path.join(here, "moz_data", "lib", "libmozcadio.so"),
-    ]
+    candidates = [os.environ.get("MOZ_CADIO_LIB") or ""]
+    for name in _lib_names():
+        candidates.extend([
+            os.path.join(here, name),
+            os.path.join(here, os.pardir, "build", "lib", name),
+            os.path.join(here, "moz_data", "lib", name),
+        ])
+    return candidates
 
 
 def lib_path() -> str:
-    """返回实际会加载的 ``libmozcadio.so`` 路径（找不到就抛 CadIoError）。"""
+    """返回实际会加载的动态库路径（找不到就抛 CadIoError，说明该平台的文件名）。"""
     for candidate in _candidate_libs():
         if candidate and os.path.exists(candidate):
             return os.path.abspath(candidate)
+    names = " / ".join(_lib_names())
     raise CadIoError(
-        "找不到 libmozcadio.so：先跑 bash scripts/build_moz_cadio.sh，"
+        f"找不到 {names}：先跑 bash scripts/build_moz_cadio.sh，"
         "或用 MOZ_CADIO_LIB 指定路径"
     )
 
