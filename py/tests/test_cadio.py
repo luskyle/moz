@@ -294,6 +294,22 @@ def test_dwg_insert_names_are_not_truncated(cadio):
     assert "*T9" in definitions and "*T9" in set(names)
 
 
+def test_hatch_curve_warnings_are_aggregated(cadio):
+    """剖面线边界曲线的"仅为显示"通知要**汇成一行带计数**，不能每个剖面线来一条。
+
+    实测 `api-cw750-details.dxf`：87 个剖面线里有 71 个带曲线边界，以前在面板里刷 71 条
+    同声（去重后只有 5 种 N 值，没有别的信息量），现在是一行。
+    """
+    path = CORPUS / "dxf-parser" / "samples__data__api-cw750-details.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    cad = cadio.read(str(path))
+    assert len(cad.by_kind("HATCH")) >= 80
+    assert len(cad.warnings) <= 2, cad.warnings[:5]
+    assert not [text for text in cad.warnings if "剖面线边界含 " in text]  # 旧的逐条消息没了
+    assert any("个剖面线边界含曲线段" in text for text in cad.warnings)    # 汇成一行带计数了
+
+
 def test_helix_is_drawn_from_axis_and_turns(cadio, tmp_path):
     """HELIX（螺旋）：上游给了轴基点/起点/轴向量/半径/圈数，按它采样成折线画出来。
 

@@ -308,12 +308,15 @@ struct moz_cad_file {
   std::vector<moz_cad_block> blocks;
   std::deque<std::string> warnings;
   std::map<std::string, int> ignored;   /* 忽略计数（有序，告警可复现） */
+  std::map<std::string, int> recurring; /* "来说明"类告警的计数：一张图 71 个剖面线的采样通知
+                                           合成一行（现状下这些消息只会按图去重，不会真有详情） */
   std::string current_block;            /* "" 表示模型空间 */
   std::unordered_map<int, std::string> block_by_handle;
   int open_block_index = -1;
 
   void warn(const std::string &text) { warnings.push_back(text); }
   void ignore(const std::string &what) { ignored[what] += 1; }
+  void repeat(const std::string &what) { recurring[what] += 1; }
   /* "*T"/"*U" 这种两字符匿名占位名（真名是 "*T9"/"*U19"） */
   static bool truncated_name(const char *name) {
     return name != nullptr && name[0] == '*' && name[1] != '\0' && name[2] == '\0';
@@ -459,6 +462,9 @@ struct moz_cad_file {
   void flush_ignored() {
     for (const auto &kv : ignored) {
       warn("忽略 " + std::to_string(kv.second) + " 个" + kv.first);
+    }
+    for (const auto &kv : recurring) {
+      warn(std::to_string(kv.second) + " 个" + kv.first);
     }
   }
 };
@@ -839,12 +845,13 @@ class Collector : public DRW_Interface {
     std::vector<int> offsets;
     int curves = 0, splines = 0;
     flatten_hatch(*data, points, offsets, &curves, &splines);
+    /* 采样/跳过是"仅为显示"的说明，不应该每个剖面线来一条——一张图几十个剖面线就
+       刷屏了（实测 api-cw750-details.dxf 71 条同声）。合成一行带计数。 */
     if (curves > 0) {
-      f.warn("剖面线边界含 " + std::to_string(curves) + " 段曲线，已按 " +
-             std::to_string(kHatchParts) + " 段采样（仅为显示）");
+      f.repeat("剖面线边界含曲线段（已按 16 段采样，仅为显示）");
     }
     if (splines > 0) {
-      f.warn("剖面线边界含 " + std::to_string(splines) + " 条样条，未展开（已跳过）");
+      f.repeat("剖面线边界含样条段（未采样——这部分边界是空的）");
     }
     e.npoints = static_cast<int>(points.size() / 2);
     e.points = f.pool.arr(points);
