@@ -364,8 +364,11 @@ def test_images_show_pixels_or_generated_placeholders(qt_app, tmp_path):
 
 
 def test_mouse_drag_pans_the_view(qt_app):
-    """看图区**左键拖动平移**：拖多远，内容跟多远（以前只配了 ScrollHandDrag，
-    图一旦恰好填满视口就没反应）。"""
+    """看图区**左键按住拖动 ≡ 内容跟手**（1:1，放大后也一样跟）。
+
+    以前用 ``view.translate()``：在 AnchorUnderMouse 下会被 Qt 的锚点逻辑抵消——实测拖
+    120px 视口只动 0.3px。现在按设备像素调滚动条：拖多少、内容走多少。
+    """
     import math
 
     import moz_cadview as cadview
@@ -378,18 +381,33 @@ def test_mouse_drag_pans_the_view(qt_app):
     view = cadview.CadView(cadview.load(str(path)))
     view.window.show()
     qt_app.processEvents()
+    for _ in range(6):                                   # 放大，让滚动条有行程
+        view.view.scale(1.3, 1.3)
+    qt_app.processEvents()
+    transform = view.view.viewportTransform()
+    scale_px = math.hypot(transform.m11(), transform.m12())
+
     center = view.view.viewport().rect().center()
+    hbar_before = view.view.horizontalScrollBar().value()
+    vbar_before = view.view.verticalScrollBar().value()
     before = view.view.mapToScene(center)
+    drag = QPoint(120, 80)
     QTest.mousePress(view.view.viewport(), Qt.LeftButton, pos=center)
-    for x, y in ((20, 0), (60, 30), (140, 90)):
+    for x, y in ((30, 0), (60, 20), (120, 80)):          # 分段拖动（最后一个点 = 净位移）
         QTest.mouseMove(view.view.viewport(), center + QPoint(x, y))
         qt_app.processEvents()
-    QTest.mouseRelease(view.view.viewport(), Qt.LeftButton,
-                       pos=center + QPoint(140, 90))
+    QTest.mouseRelease(view.view.viewport(), Qt.LeftButton, pos=center + drag)
     qt_app.processEvents()
+
+    hbar_after = view.view.horizontalScrollBar().value()
+    vbar_after = view.view.verticalScrollBar().value()
+    assert hbar_before - hbar_after == 120 and vbar_before - vbar_after == 80, \
+        f"滚动条位移应等于拖动像素：({hbar_before - hbar_after}, {vbar_before - vbar_after})"
     after = view.view.mapToScene(center)
-    assert math.hypot(after.x() - before.x(), after.y() - before.y()) > 10, \
-        "拖动后视口中心的场景点应该明显变了"
+    screen_shift = math.hypot((before.x() - after.x()) * scale_px,
+                              (before.y() - after.y()) * scale_px)
+    assert abs(screen_shift - math.hypot(drag.x(), drag.y())) < 30, \
+        f"内容应 1:1 跟手：屏幕位移 {screen_shift:.0f}px（拖动 {math.hypot(*drag):.0f}px）"
     view.window.close()
 
 

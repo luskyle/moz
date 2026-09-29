@@ -753,7 +753,12 @@ def _dropped_path(event):  # pragma: no cover - 需要 Qt
 
 
 def _make_view():  # pragma: no cover - 需要 Qt
-    """看图用的 QGraphicsView：**滚轮缩放**（以光标为锚点），**左键拖动平移**。"""
+    """看图用的 QGraphicsView：**滚轮缩放**（以光标为锚点），**左键拖动平移**。
+
+    平移不用 ``view.translate()``：那是在**视图坐标**里平移，且会被 ``AnchorUnderMouse``
+    的锚点逻辑抵消——实测拖 120px 视口只动 0.3px，放大后"不跟手"。滚动条是设备像素单位，
+    直接减增量就是 1:1 跟手（图恰好填满视口、没有滚动空间时不滚，这也是对的）。
+    """
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QGraphicsView
 
@@ -767,8 +772,6 @@ def _make_view():  # pragma: no cover - 需要 Qt
             if event.button() == Qt.LeftButton:
                 self._drag_pos = event.position()
                 self.setCursor(Qt.ClosedHandCursor)
-                self._drag_anchor = self.transformationAnchor()
-                self.setTransformationAnchor(QGraphicsView.NoAnchor)
                 event.accept()
                 return
             super().mousePressEvent(event)
@@ -778,7 +781,10 @@ def _make_view():  # pragma: no cover - 需要 Qt
             if pos is not None:
                 delta = event.position() - pos
                 self._drag_pos = event.position()
-                self.translate(delta.x(), delta.y())      # 屏幕坐标拖动 → 内容跟手
+                self.horizontalScrollBar().setValue(
+                    self.horizontalScrollBar().value() - round(delta.x()))
+                self.verticalScrollBar().setValue(
+                    self.verticalScrollBar().value() - round(delta.y()))
                 event.accept()
                 return
             super().mouseMoveEvent(event)
@@ -787,8 +793,6 @@ def _make_view():  # pragma: no cover - 需要 Qt
             if event.button() == Qt.LeftButton and getattr(self, "_drag_pos", None) is not None:
                 self._drag_pos = None
                 self.setCursor(Qt.OpenHandCursor)
-                self.setTransformationAnchor(getattr(self, "_drag_anchor",
-                                                     QGraphicsView.AnchorUnderMouse))
                 event.accept()
                 return
             super().mouseReleaseEvent(event)
