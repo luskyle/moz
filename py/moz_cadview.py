@@ -131,18 +131,19 @@ def resolve_colour(entity, layer, aci_table):
     return aci_table.rgb(index)
 
 
-def model_as_json(cad):
-    """把规范化模型摊平成 Webview **可交互**的 JSON（图元折线 + 文字，颜色按浅色方案算好）。
+def model_as_json(cad, dark=False):
+    """把规范化模型摊平成 Webview **可交互**的 JSON（图元折线 + 文字，颜色按主题算好）。
 
     纯 Python（不碰 Qt）：入口是 ``python -m moz_cadview 图.dwg --model-json out.json``，
     VS Code 插件的交互图纸后台走这里。几何/颜色复用与 Qt 看图器**同一套函数**
     （``entity_polylines`` / ``resolve_colour`` / ``linetype_pattern`` / ``mtext_to_display``），
-    不出现两套口径。返回：
+    不出现两套口径。``dark=True`` 按深色画布配色（7 号色 → 白），浅色主题则黑线白底。
+    返回：
 
     ``{"format", "version", "units", "layers": [...], "items": [{layer, kind, color, fill,
     dash, closed, points:[x0,y0,…], text/pos/h/rot 可选}]}``
     """
-    aci = AciTable(background_dark=False)                 # 浅色：黑线白底
+    aci = AciTable(background_dark=dark)                  # 浅色主题黑线白底 / 深色主题浅线深底
     layer_map = cad.layer_map()
     layers_seen: list[str] = []
     items: list[dict] = []
@@ -1387,6 +1388,8 @@ def main(argv=None):
     parser.add_argument("--export-svg", metavar="PATH", help="导出 SVG（无窗口）")
     parser.add_argument("--model-json", metavar="PATH",
                         help="导出 Webview 可交互的图元 JSON（无窗口、**不需要 PySide6**）")
+    parser.add_argument("--dark", action="store_true",
+                        help="model-json 用深色画布配色（7 号色翻白；Webview 深色主题时传）")
     parser.add_argument("--width", type=int, default=1600, help="导出宽度（默认 1600）")
     parser.add_argument("--height", type=int, default=1200, help="导出高度（默认 1200）")
     parser.add_argument("--light", action="store_true", help="浅色背景")
@@ -1430,7 +1433,7 @@ def main(argv=None):
         return 0
 
     if args.model_json:
-        model = model_as_json(cad)
+        model = model_as_json(cad, dark=args.dark)
         with open(args.model_json, "w", encoding="utf-8") as handle:
             json.dump(model, handle, ensure_ascii=False)
         print(f"已导出 {args.model_json}（{len(cad.entities)} 个实体，"

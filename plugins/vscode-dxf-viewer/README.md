@@ -20,7 +20,8 @@
 - 真曲线：样条（有理 de Boor）、椭圆/弧、多段线 bulge、剖面线边界（含样条段）
 - 块与标注展开、`\U+XXXX` 转义与 MTEXT 排版码解译、图片像素（读得到文件时）、
   PDF 底图页渲染、多线/多重引线/网格/遮罩/形状/底图等实体族
-- 后端产出**规范化图元 JSON**（`--model-json`：图元折线 + 文字，颜色/线型已按浅色方案算好），
+- 后端产出**规范化图元 JSON**（`--model-json`：图元折线 + 文字，颜色/线型已按主题算好
+  ——深色主题自动翻白 7 号色，黑线不会压进深灰背景里），
   Webview 用 Canvas 把它画成可交互图纸——后端**不依赖 PySide6**，只有 Python 3.8+ 就行
 
 ## 目录结构
@@ -48,7 +49,7 @@ CI/CD 两个 workflow 在仓库根 `.github/workflows/`（GitHub 只认根目录
 
 ```bash
 # 从 GitHub Release（tag vscode-dxf-viewer-v*）或 CI 产物下载 vsix，直接装：
-code --install-extension moz-dxf-viewer-0.2.0.vsix
+code --install-extension moz-dxf-viewer-0.2.1.vsix
 ```
 
 装完就能用，不需要 moz 仓库检出、不需要 cmake/g++/PySide6。机器上只要有一个
@@ -87,7 +88,7 @@ npm run compile        # tsc 严格模式
 ```bash
 cd plugins/vscode-dxf-viewer
 npm run package          # = bundle-backend（拷 py + .so → python/）&& vsce package
-                         # 产出 moz-dxf-viewer-0.2.0.vsix（内含 python/ + libmozcadio.so）
+                         # 产出 moz-dxf-viewer-0.2.1.vsix（内含 python/ + libmozcadio.so）
 ```
 
 - **GitHub Release（自动）**：给仓库打 tag `vscode-dxf-viewer-v*`，release workflow

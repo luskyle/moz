@@ -176,6 +176,27 @@ def test_model_as_json_line_colour_follows_layer(cadview):
     assert any(item["color"] != "#000000" for item in model["items"])   # 别的层有颜色
 
 
+def test_model_as_json_dark_scheme_flips_black_to_white(cadview):
+    """深色画布配色：7 号色（黑）→ 白，其余颜色不动；浅色方案才出黑线。
+
+    Webview 深色主题（VS Code Dark/HighContrast）时模型按 ``dark=True`` 出**浅色线条**
+    ——否则黑线压在深灰背景上看不见（截图反馈：大片图元是暗的，只有少数的色能看见）。
+    """
+    light = cadview.model_as_json(cadview.load(str(DRAWINGS / "plate.dxf")))
+    dark = cadview.model_as_json(cadview.load(str(DRAWINGS / "plate.dxf")), dark=True)
+    light_black = [item for item in light["items"] if item["color"] == "#000000"]
+    assert light_black, "plate.dxf 的 7 号色实体在浅色方案必须是黑线（截图的根源）"
+    assert not [item for item in dark["items"] if item["color"] == "#000000"], \
+        "深色方案下不应再有黑线（7 号色要翻白）"
+    white = [item for item in dark["items"] if item["color"] == "#ffffff"]
+    assert len(white) == len(light_black), \
+        f"被翻白的量应等于原黑线量：{len(white)} vs {len(light_black)}"
+    non_black_light = {item["color"] for item in light["items"]} - {"#000000"}
+    non_black_dark = {item["color"] for item in dark["items"]} - {"#ffffff"}
+    assert non_black_dark == non_black_light, \
+        f"翻白之外的颜色必须保持浅色方案的原色：{non_black_light} vs {non_black_dark}"
+
+
 # --- 场景装配 ---
 
 

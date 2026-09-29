@@ -96,14 +96,22 @@ export async function buildBackend(pyDir: string): Promise<void> {
  * 把一张 DXF/DWG 摊平成 **可交互图元 JSON**（图元折线 + 文字，颜色/线型已算好）。
  * 通过 `python -m moz_cadview <图> --model-json <临时文件>` 实现——纯 Python + .so，
  * **不需要 PySide6**；扩展自带后端的打包布局就是 python/（见 scripts/bundle-backend.sh）。
+ * `dark` 让后端按深色画布配色（7 号色翻白），配合 VS Code 深色主题的深灰背景。
  */
-export async function dumpModel(pyDir: string, drawingPath: string): Promise<string> {
+export async function dumpModel(
+  pyDir: string,
+  drawingPath: string,
+  dark: boolean,
+): Promise<string> {
   const interpreter = vscode.workspace
     .getConfiguration('mozDxfViewer')
     .get<string>('python', 'python3');
   const soFile = findLibSo(pyDir);
   const tmpJson = path.join(os.tmpdir(), `moz-model-${Date.now()}.json`);
   const args = ['-m', 'moz_cadview', drawingPath, '--model-json', tmpJson];
+  if (dark) {
+    args.push('--dark');
+  }
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (soFile) {
     env.MOZ_CADIO_LIB = soFile;

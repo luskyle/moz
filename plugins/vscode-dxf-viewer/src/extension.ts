@@ -63,6 +63,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+/** 当前主题要深色画布吗（Dark/HighContrast → 后端按浅线配色，压着深灰底才看得见）。 */
+function isDarkTheme(): boolean {
+  const kind = vscode.window.activeColorTheme.kind;
+  return kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
+}
+
 async function render(
   context: vscode.ExtensionContext,
   panel: vscode.WebviewPanel,
@@ -78,6 +84,7 @@ async function render(
           '可在设置 mozDxfViewer.backendPyDir 里指定仓库的 py/ 目录。',
       );
     }
+    const dark = isDarkTheme();                  // 线色按画布深浅出：黑线压深灰底 = 看不见
     const model = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -104,7 +111,7 @@ async function render(
           }
           await buildBackend(pyDir);
         }
-        return dumpModel(pyDir, uri.fsPath);
+        return dumpModel(pyDir, uri.fsPath, dark);
       },
     );
     void panel.webview.postMessage({ type: 'model', name, json: model });
