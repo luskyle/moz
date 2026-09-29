@@ -33,11 +33,12 @@ jobs:
           cd plugins/vscode-dxf-viewer
           npm run bundle-backend
           npx vsce package --no-dependencies --out moz-dxf-viewer.vsix
-      - name: 校验 vsix 内置 python/ + .so
+      - name: 校验 vsix 内置 python/ + .so + 图标
         working-directory: plugins/vscode-dxf-viewer
         run: |
           unzip -l moz-dxf-viewer.vsix | grep -q 'extension/python/moz_data/lib/libmozcadio.so'
-          echo "vsix 已带自带后端"
+          unzip -l moz-dxf-viewer.vsix | grep -q 'extension/icon.png'
+          echo "vsix 已带自带后端与图标"
 
       - name: 挂到 GitHub Release（tag 自动建）
         uses: softprops/action-gh-release@v2

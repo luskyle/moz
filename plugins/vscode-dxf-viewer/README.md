@@ -1,5 +1,7 @@
 # Moz DXF/DWG Viewer
 
+![Moz DXF/DWG Viewer](icon.png)
+
 在 VS Code 里**直接打开 DXF/DWG 图纸**——不需要安装 AutoCAD/LibreCAD，点开就能看、
 能交互。图纸由扩展自带的解析后端（libdxfrw + `libmozcadio.so`）真实解析，不是一张
 截图或导出图：所有图元都是可缩放、可点选的真实矢量。

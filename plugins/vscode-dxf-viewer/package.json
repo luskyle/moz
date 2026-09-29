@@ -5,6 +5,15 @@
   "version": "0.2.1",
   "publisher": "luskyle",
   "license": "Apache-2.0",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luskyle/moz"
+  },
+  "galleryBanner": {
+    "color": "#1857e0",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
