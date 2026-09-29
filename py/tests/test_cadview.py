@@ -293,6 +293,40 @@ def test_dwg_fit_is_not_blown_up_by_rays(cadview, qt_app):
     assert drawable.height() > 100
 
 
+def test_window_actually_paints_the_drawing(qt_app, tmp_path):
+    """窗口的绘图区要**真的有内容**（不是面板里有数字、画布上一片白）。
+
+    两个样本都踩过：①取景被无限长线撑爆；②更隐蔽的——QGraphicsView 默认白背景，
+    而图纸颜色按 dark 调色板配（浅色线），浅线画在白底上=看不见。这里 grab 视口数墨迹。
+    """
+    import moz_cadview as cadview
+
+    paths = [DWGS / "libdxfrw" / "tests__fixtures__dwg__large_radial.dwg",
+             DWGS / "acadsharp" / "samples__sample_AC1015.dwg"]
+    canvas = [p for p in paths if p.exists()][:1] or paths
+    for path in canvas:
+        view = cadview.CadView(cadview.load(str(path)))       # dark=True 默认
+        view.window.show()
+        qt_app.processEvents()
+        brush = view.view.backgroundBrush().color()
+        assert brush.name() == "#1e1e1e", "背景必须跟 dark 调色板一致"
+        image = view.view.viewport().grab().toImage()
+        background = image.pixel(2, 2) & 0xFFFFFF
+        total = ink = 0
+        for x in range(0, image.width(), 2):
+            for y in range(0, image.height(), 2):
+                total += 1
+                if abs((image.pixel(x, y) & 0xFFFFFF) - background) > 0x101010:
+                    ink += 1
+        assert ink / total >= 0.001, f"{path.name}：画布是空的（墨迹 {ink}/{total}）"
+        view.window.close()
+
+    light = cadview.CadView(cadview.load(str(paths[0])), dark=False) if paths[0].exists() else None
+    if light is not None:
+        assert light.view.backgroundBrush().color().name() == "#ffffff"
+        light.window.close()
+
+
 # --- 目录与"方便打开"（图纸列表、点击切换、拖拽、demo） ---
 
 

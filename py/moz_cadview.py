@@ -665,7 +665,7 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
 
     def __init__(self, cad, dark=True, title=None, directory=None, recursive=False):
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QAction, QKeySequence, QPainter
+        from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter
         from PySide6.QtWidgets import QGraphicsView, QListWidget, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
         self.dark = dark
@@ -677,6 +677,9 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         view.scale(1.0, -1.0)                       # DXF 的 Y 向上，Qt 的 Y 向下
         view.setDragMode(QGraphicsView.ScrollHandDrag)
         view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        # QGraphicsView 默认用系统调色板的白色背景，而图纸颜色是按 dark 调色板配的——
+        # 不设背景会把深色配色的浅色线画在白底上，整张图"看不见"（实测两个样本都这样）。
+        view.setBackgroundBrush(QColor(30, 30, 30) if dark else QColor(255, 255, 255))
         window.setCentralWidget(view)
 
         drawings = QListWidget()                    # 图纸列表：点一下就换图
