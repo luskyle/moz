@@ -362,7 +362,7 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
 
     def text_item(entity, matrix):
         """文字项（TEXT/MTEXT/MLEADER 共用）：位置按变换走，字高按像素给（视图 Y 翻转要翻回来）。"""
-        text = (entity.text or "").replace("\\P", "\n").split("\n")[0]
+        text = mtext_to_display(entity.text or "").split("\n")[0]
         if not text or not entity.p1:
             return None
         position = moz_cadio.matrix_apply(matrix, entity.p1)
@@ -588,6 +588,57 @@ def _pixmap_item(pixmap, corners, matrix):
                                  (p3[0] - p0[0]) / height, (p3[1] - p0[1]) / height,
                                  p0[0], p0[1]))
     return item
+
+
+def mtext_to_display(text):
+    r"""MTEXT/TEXT 的**原始串 → 显示串**：剥掉 AutoCAD 的 MTEXT 排版码。
+
+    模型里存的是 DXF 原文（`\A1;30` 这样的），显示层才解释：
+      - ``\P`` → 换行
+      - ``\A0;`` / ``\C1;`` / ``\H1.5x;`` / ``\f字体;`` … 这类"纯排版"码 → 剥掉（内容保留）
+      - ``\S上^下;`` 堆叠 → 摊平成 "上/下"
+      - 残留的 ``\U+XXXX`` 字符转义 → 解成真正的字符
+    未知的 ``\x`` 原样保留（不猜）。
+    """
+    if not text or "\\" not in text:
+        return text
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "\\":
+            out.append(text[i])
+            i += 1
+            continue
+        if i + 1 >= n:                              # 结尾的孤反斜杠
+            out.append("\\")
+            break
+        code = text[i + 1]
+        if code in "uU" and i + 2 < n and text[i + 2] == "+" and i + 6 < n:
+            try:                                    # \U+XXXX：字符转义
+                out.append(chr(int(text[i + 3:i + 7], 16)))
+                i += 7
+                continue
+            except ValueError:
+                pass
+        if code in "pP":                            # 换行
+            out.append("\n")
+            i += 2
+            continue
+        if code in "aAcCfHhSsTtQqWwFf":             # 排版码：\X...; 剥掉（\S 保留内容）
+            end = text.find(";", i + 2)
+            if end == -1:
+                end = i + 2
+            if code == "S" or code == "s":
+                out.append(text[i + 2:end].replace("^", "/").replace("#", "/"))
+            i = end + 1
+            continue
+        if code in "oOlLlKk":                       # 开关类（\O 上划线、\L 下划线…）
+            i += 2
+            continue
+        out.append("\\")                            # 未知转义：保留
+        i += 1
+    return "".join(out)
 
 
 def _drawing_extent(cad):

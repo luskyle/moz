@@ -411,6 +411,30 @@ def test_mouse_drag_pans_the_view(qt_app):
     view.window.close()
 
 
+def test_mtext_formatting_codes_are_not_displayed(qt_app, tmp_path):
+    r"""MTEXT 的排版码（`\A1;`、`\C1;`、`\H`、`\f`…）不能原样画出来。
+
+    实测 `qcad/support__data__tests__dimstyle__acad_archticks.dxf`：标注文字是 `\A1;30`
+    （\A1; = 对齐指令），以前画面上直接显示 `\A1;30`。模型保持原文，显示层剥码。
+    """
+    import moz_cadview as cadview
+
+    assert cadview.mtext_to_display("\\A1;30") == "30"                 # 对齐码
+    assert cadview.mtext_to_display("a\\Pb\\Pc") == "a\nb\nc"          # 换行
+    assert cadview.mtext_to_display("\\fSimSun;\\C1;\\H1.5x;你好") == "你好"
+    assert cadview.mtext_to_display("\\S1^2;") == "1/2"                # 堆叠摊平
+    assert cadview.mtext_to_display("\\U+03B1") == "α"                 # 字符转义
+    assert cadview.mtext_to_display("普通文字") == "普通文字"
+    assert cadview.mtext_to_display("\\x未知;") == "\\x未知;"          # 未知码保留
+
+    path = CORPUS / "qcad" / "support__data__tests__dimstyle__acad_archticks.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    scene, _per, _counts, _missing, _notes = cadview.build_scene(cadview.load(str(path)))
+    texts = [item.text() for item in scene.items() if hasattr(item, "text")]
+    assert "30" in texts and not any("\\A1" in tag for tag in texts)
+
+
 def test_window_actually_paints_the_drawing(qt_app, tmp_path):
     """窗口的绘图区要**真的有内容**（不是面板里有数字、画布上一片白）。
 
