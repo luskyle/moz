@@ -487,19 +487,52 @@ def test_list_drawings_recursive_and_flat(cadview, tmp_path):
 
 
 def test_view_lists_directory_and_switches_by_click(cadview, qt_app, tmp_path):
-    """打开一张图后，「图纸」面板列出同目录的图纸，点一下（或点条目）就换图。"""
+    """打开一张图后，「图纸」面板（目录树）列出同目录的图纸，点一下就换图。"""
     for source in ("plate", "bracket", "messy"):
         shutil.copy(DRAWINGS / f"{source}.dxf", tmp_path / f"{source}.dxf")
     view = cadview.CadView(cadview.load(str(tmp_path / "plate.dxf")))
     view.warn_on_error = False                     # 失败时别弹模态框（测试里会挂）
-    assert view.drawings.count() == 3
-    labels = [view.drawings.item(i).text() for i in range(view.drawings.count())]
-    assert labels == ["bracket.dxf", "messy.dxf", "plate.dxf"]
+    assert cadview.tree_file_count(view.drawings) == 3
+    root = view.drawings.topLevelItem(0)
+    assert root.text(0) == tmp_path.name           # 根节点 = 扫描目录名
+    labels = [root.child(i).text(0) for i in range(root.childCount())]
+    assert labels == ["bracket.dxf", "messy.dxf", "plate.dxf"]   # 叶子显示短文件名
 
-    chosen = view.drawings.item(0)                 # 点第一个
+    chosen = root.child(0)                         # 点第一个
     view._on_drawing_clicked(chosen)
     assert Path(view.cad.path).name == "bracket.dxf"
-    assert view.drawings.currentItem().text() == "bracket.dxf"
+    assert view.drawings.currentItem().text(0) == "bracket.dxf"
+
+
+def test_drawings_tree_and_keyboard_switching(cadview, qt_app, tmp_path):
+    """图纸列表是**目录树**，↑/↓ 键盘能切换图纸（目录节点跳过、只换图不重开）。"""
+    import os
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    (tmp_path / "sub").mkdir()
+    shutil.copy(DRAWINGS / "plate.dxf", tmp_path / "a.dxf")
+    shutil.copy(DRAWINGS / "messy.dxf", tmp_path / "b.dxf")
+    shutil.copy(DRAWINGS / "bracket.dxf", tmp_path / "sub" / "c.dxf")
+    view = cadview.CadView(cadview.load(str(tmp_path / "a.dxf")), recursive=True)
+    view.warn_on_error = False
+    root = view.drawings.topLevelItem(0)
+    assert root.childCount() == 3                  # a、b 两个文件 + "sub" 目录节点
+    sub = next(root.child(i) for i in range(root.childCount())
+               if root.child(i).text(0) == "sub")
+    assert sub.childCount() == 1                   # c 在子目录节点下
+    assert cadview.tree_file_count(view.drawings) == 3
+    current = os.path.abspath(view.drawings.currentItem().data(0, Qt.UserRole))
+    assert current == os.path.abspath(str(tmp_path / "a.dxf"))
+
+    view.drawings.setFocus()
+    QTest.keyClick(view.drawings, Qt.Key_Down)     # ↑/↓ 在树里移动当前项 → currentItemChanged
+    assert Path(view.cad.path).name == "b.dxf"
+    QTest.keyClick(view.drawings, Qt.Key_Down)     # 经过"sub"目录节点不换图，落到 c
+    assert Path(view.cad.path).name == "c.dxf"
+    QTest.keyClick(view.drawings, Qt.Key_Up)       # 再往上：经过目录节点回到 b
+    assert Path(view.cad.path).name == "b.dxf"
 
 
 def test_view_open_directory_lists_all(cadview, qt_app, tmp_path):
@@ -510,7 +543,7 @@ def test_view_open_directory_lists_all(cadview, qt_app, tmp_path):
     view = cadview.CadView(cadview.load(str(tmp_path / "one.dxf")))
     view.warn_on_error = False
     assert view.open_directory(str(tmp_path)) is True
-    assert view.drawings.count() == 2
+    assert cadview.tree_file_count(view.drawings) == 2
     assert Path(view.cad.path).name == "one.dxf"    # 已经在目录里就不换当前这张
     assert Path(view.directory) == tmp_path
     view.open_any(str(tmp_path / "nested"))         # open_any 也认目录
@@ -608,10 +641,10 @@ def test_drawing_list_reports_truncation(cadview, qt_app, tmp_path):
         shutil.copy(DRAWINGS / "plate.dxf", tmp_path / f"copy{index}.dxf")
     view = cadview.CadView(cadview.load(str(tmp_path / "copy0.dxf")), recursive=True)
     view.warn_on_error = False
-    assert view.open_directory(str(tmp_path)) is True
-    assert view.drawings.count() == 3                  # 没撞上限：正常
+    view.open_directory(str(tmp_path))
+    assert cadview.tree_file_count(view.drawings) == 3       # 没撞上限：正常
     view.set_directory(str(tmp_path), recursive=True, limit=2)
-    assert view.drawings.count() == 2
+    assert cadview.tree_file_count(view.drawings) == 2
     assert "只列了前 2 张" in view.window.statusBar().currentMessage()
 
 
@@ -649,11 +682,11 @@ def test_directory_stays_when_clicking_inside_it(cadview, qt_app, tmp_path):
     view = cadview.CadView(cadview.load(str(tmp_path / "one.dxf")))
     view.warn_on_error = False
     view.open_directory(str(tmp_path))
-    assert view.drawings.count() == 2
+    assert cadview.tree_file_count(view.drawings) == 2
     assert view.open_path(str(tmp_path / "nested" / "two.dxf")) is True
-    assert view.drawings.count() == 2                        # 列表没被收窄
+    assert cadview.tree_file_count(view.drawings) == 2        # 列表没被收窄
     assert Path(view.directory) == tmp_path
-    assert view.drawings.currentItem().text() == "nested/two.dxf"   # 递归时显示相对路径
+    assert view.drawings.currentItem().text(0) == "two.dxf"  # 树叶子显示文件名（目录节点表示层级）
 
 
 def test_empty_drawing_shows_a_notice(cadview, qt_app):

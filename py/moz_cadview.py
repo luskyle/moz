@@ -857,7 +857,16 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
     def __init__(self, cad, dark=True, title=None, directory=None, recursive=False):
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter
-        from PySide6.QtWidgets import QGraphicsView, QListWidget, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QAbstractItemView,
+            QGraphicsView,
+            QListWidget,
+            QPlainTextEdit,
+            QPushButton,
+            QTreeWidget,
+            QVBoxLayout,
+            QWidget,
+        )
 
         self.dark = dark
         self.directory = None
@@ -873,8 +882,44 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         view.setBackgroundBrush(QColor(30, 30, 30) if dark else QColor(255, 255, 255))
         window.setCentralWidget(view)
 
-        drawings = QListWidget()                    # 图纸列表：点一下就换图
+        class DrawingTree(QTreeWidget):
+            """图纸目录树：↑/↓ 只在**图纸（文件叶子）**之间跳——目录节点是结构，不占切换步数。"""
+
+            def _file_leaves(self):
+                from PySide6.QtCore import Qt
+
+                def walk(item):
+                    yield item
+                    for i in range(item.childCount()):
+                        yield from walk(item.child(i))
+
+                return [item for i in range(self.topLevelItemCount())
+                        for item in walk(self.topLevelItem(i))
+                        if item.data(0, Qt.UserRole)]
+
+            def keyPressEvent(self, event):
+                from PySide6.QtCore import Qt
+
+                if event.key() in (Qt.Key_Up, Qt.Key_Down) and self.currentItem() is not None:
+                    leaves = self._file_leaves()
+                    if leaves:
+                        index = next((i for i, item in enumerate(leaves)
+                                      if item is self.currentItem()), -1)
+                        index += -1 if event.key() == Qt.Key_Up else 1
+                        if 0 <= index < len(leaves):
+                            self.setCurrentItem(leaves[index])   # currentItemChanged → 换图
+                            event.accept()
+                            return
+                super().keyPressEvent(event)
+
+        drawings = DrawingTree()                    # 图纸列表（树形：目录 → 文件），点一下/方向键换图
+        drawings.setHeaderHidden(True)
+        drawings.setRootIsDecorated(True)
+        drawings.setUniformRowHeights(True)
+        drawings.setSelectionMode(QAbstractItemView.SingleSelection)
+        drawings.setFocusPolicy(Qt.StrongFocus)
         drawings.itemClicked.connect(self._on_drawing_clicked)
+        drawings.currentItemChanged.connect(self._on_drawing_activated)
         layers = QListWidget()                      # 图层开关
         layers.itemChanged.connect(self._on_layer_toggled)
 
@@ -966,38 +1011,59 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
         self.fit()
 
     def set_directory(self, directory, recursive=False, limit=DRAWING_LIMIT):
-        """把"图纸列表"填成这个目录里的图纸，并选中当前这张（不在里面就不选）。"""
+        """把"图纸列表"填成**目录树**（根 = 扫描目录，子目录逐层建节点，文件是叶子），
+        并选中当前这张（不在里面就不选）。点文件叶子或按 ↑/↓ 都能换图。
+        """
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QListWidgetItem
+        from PySide6.QtWidgets import QTreeWidgetItem
 
         self.directory = directory
         self.recursive = recursive
         entries = list_drawings(directory, recursive=recursive, limit=limit)
-        current = os.path.abspath(self.cad.path) if self.cad.path else ""
         self.drawings.blockSignals(True)
         self.drawings.clear()
-        selected = -1
-        for index, path in enumerate(entries):
-            label = os.path.relpath(path, directory) if recursive else os.path.basename(path)
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, path)
-            item.setToolTip(path)
-            self.drawings.addItem(item)
-            if os.path.abspath(path) == current:
-                selected = index
+        root_item = QTreeWidgetItem([os.path.basename(os.path.abspath(directory)) or directory])
+        root_item.setFlags(Qt.ItemIsEnabled)              # 根只用来展开/收起
+        self.drawings.addTopLevelItem(root_item)
+        for path in entries:
+            parts = os.path.relpath(path, directory).split(os.sep)
+            node = root_item
+            for part in parts[:-1]:                       # 逐层建目录节点（同名复用）
+                child = next((node.child(i) for i in range(node.childCount())
+                              if node.child(i).text(0) == part), None)
+                if child is None:
+                    child = QTreeWidgetItem(node, [part])
+                    child.setFlags(Qt.ItemIsEnabled)
+                node = child
+            leaf = QTreeWidgetItem(node, [os.path.basename(path)])
+            leaf.setData(0, Qt.UserRole, path)
+            leaf.setToolTip(0, path)                      # 短名当行标签，整条路径放提示里
+        self.drawings.expandAll()                         # 默认全展开：树形可见、↑/↓ 能走到每张
         self.drawings.blockSignals(False)
         if recursive and len(entries) >= limit:
             # 撞上限就要说出来（项目根这种目录里图纸上千张，不能假装只有这些）
             self.window.statusBar().showMessage(
                 f"图纸太多，只列了前 {limit} 张（`list_drawings(limit=)` 可调）")
-        if selected >= 0:
-            self.drawings.setCurrentRow(selected)
-            self.drawings.scrollToItem(self.drawings.item(selected))
+        self._select_current()
         return len(entries)
 
-    def _on_drawing_clicked(self, item):
+    def _on_drawing_clicked(self, item, column=0):
         from PySide6.QtCore import Qt
-        self.open_path(item.data(Qt.UserRole))
+        path = item.data(0, Qt.UserRole)
+        if path and os.path.abspath(path) != os.path.abspath(self.cad.path or ""):
+            self.open_path(path)
+
+    def _on_drawing_activated(self, current, previous=None):
+        """'当前项'变了就换图——鼠标点中、**键盘 ↑/↓ 选中**都走这里（目录节点不是图，跳过）。"""
+        from PySide6.QtCore import Qt
+        if current is None:
+            return
+        path = current.data(0, Qt.UserRole)
+        if not path:                                     # 目录/根节点：只负责展开收起
+            return
+        if os.path.abspath(path) == os.path.abspath(self.cad.path or ""):
+            return                                       # 还是这张图
+        self.open_path(path)
 
     def open_any(self, path):
         """打开一个路径：目录就列出来并打开第一张，文件就直接看（拖拽/命令行都走它）。"""
@@ -1051,13 +1117,25 @@ class CadView:  # pragma: no cover - 需要显示器/offscreen 平台
 
     def _select_current(self):
         from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QAbstractItemView
         current = os.path.abspath(self.cad.path) if self.cad.path else ""
-        for index in range(self.drawings.count()):
-            if os.path.abspath(self.drawings.item(index).data(Qt.UserRole)) == current:
+
+        def walk(item):
+            path = item.data(0, Qt.UserRole)
+            if path and os.path.abspath(path) == current:
                 self.drawings.blockSignals(True)
-                self.drawings.setCurrentRow(index)
+                self.drawings.setCurrentItem(item)
                 self.drawings.blockSignals(False)
-                self.drawings.scrollToItem(self.drawings.item(index))
+                # 居中滚到当前项：以前名单排列表里"最后一行被裁掉一半"就是没给它留空间
+                self.drawings.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                return True
+            for i in range(item.childCount()):
+                if walk(item.child(i)):
+                    return True
+            return False
+
+        for i in range(self.drawings.topLevelItemCount()):
+            if walk(self.drawings.topLevelItem(i)):
                 return
 
     def open_dialog(self):
@@ -1257,10 +1335,24 @@ def main(argv=None):
     view = CadView(cad, dark=not args.light, directory=directory, recursive=bool(directory))
     view.show()
     if directory:
-        print(f"右侧「图纸」面板里可以点着切换（共 {view.drawings.count()} 张）。")
+        print(f"右侧「图纸」面板里可以点着切换（共 {tree_file_count(view.drawings)} 张）。")
     else:
         print(f"{cad.report()}\n\n画到场景里的 item：{describe(view.counts)}")
     return application.exec()
+
+
+def tree_file_count(tree):
+    """目录树里带路径的**文件叶子**数（QTreeWidget 没有现成的总行数；根/目录节点不算）。"""
+    from PySide6.QtCore import Qt
+
+    total = 0
+    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    while stack:
+        item = stack.pop()
+        if item.data(0, Qt.UserRole):
+            total += 1
+        stack.extend(item.child(i) for i in range(item.childCount()))
+    return total
 
 
 def drawable_count(cad, missing=None, notes=None):
