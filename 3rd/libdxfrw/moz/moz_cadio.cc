@@ -15,6 +15,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <set>
 #include <utility>
 #include <string>
 #include <unordered_map>
@@ -34,6 +35,9 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
 /* 剖面线边界的曲线采样段数：只影响显示（填充本身我们不求值） */
 constexpr int kHatchParts = 16;
+/* 螺旋（HELIX）每圈采 48 段，总段数封顶（避免圈数很大时点数爆炸） */
+constexpr int kHelixPartsPerTurn = 48;
+constexpr int kHelixMaxParts = 2048;
 
 /* DRW::Version → "AC1015" 这样的串（Python 侧要用它判断 DWG 覆盖面） */
 std::string version_name(DRW::Version v) {
@@ -276,6 +280,23 @@ struct moz_cad_file {
   std::unordered_map<int, std::string> block_entity_names;
   /* 读的时候先记账，读完再解析：块记录/块实体的到达顺序在 DWG 里不保证 */
   std::vector<std::pair<size_t, int>> pending_insert_names;   /* (实体下标, 块记录句柄) */
+  /* MLINESTYLE：按名字和按句柄都能查（DWG 里实体的 styleName 常常没被解析出来，
+     只有句柄；DXF 里反过来） */
+  std::map<std::string, std::vector<double>> mline_offsets;
+  std::map<int, std::vector<double>> mline_offsets_by_handle;
+  /* 多线：样式没到之前先把每个顶点的偏移方向留着，读完再展开成 N 条平行线 */
+  struct MLinePending {
+    size_t index;
+    std::string style;
+    int handle;
+    std::vector<double> miter;      /* 每顶点一个方向（已归一化；(x,y) 交错） */
+  };
+  std::vector<MLinePending> pending_mlines;
+  /* 外部参照的文件名：IMAGE/UNDERLAY 实体先到，它们的定义对象后到（上游注释也这么说） */
+  std::unordered_map<int, std::string> image_names;      /* IMAGEDEF 句柄 → 文件名 */
+  std::unordered_map<int, std::string> underlay_names;   /* UNDERLAYDEFINITION 句柄 → 文件名 */
+  std::vector<std::pair<size_t, int>> pending_image_names;      /* (实体下标, 句柄) */
+  std::vector<std::pair<size_t, int>> pending_underlay_names;   /* (实体下标, 句柄) */
   std::string format;
   std::string version;
   int insunits = 0;
@@ -307,6 +328,132 @@ struct moz_cad_file {
       if (current != nullptr && !truncated_name(current)) continue;   /* 上游已经给对了 */
       entities[item.first].name = pool.str(it->second);
     }
+    resolve_names(pending_image_names, image_names);
+    resolve_names(pending_underlay_names, underlay_names);
+    for (const MLinePending &pending : pending_mlines) {
+      if (pending.index >= entities.size()) continue;
+      std::vector<double> style_offsets;
+      if (!mline_style_offsets(pending.handle, pending.style, style_offsets)) {
+        warn("多线：样式 \"" + (pending.style.empty() ? std::string("(无名)") : pending.style) +
+             "\" 没找到，文件里也没有它的 MLINESTYLE（只画了基线）");
+        continue;
+      }
+      expand_mline(entities[pending.index], pending.miter, style_offsets, false);
+    }
+  }
+
+  /* 外部参照的名字：定义对象到了就补到实体上（没到就保持 NULL，调用方看得到） */
+  void resolve_names(const std::vector<std::pair<size_t, int>> &pending,
+                     const std::unordered_map<int, std::string> &names) {
+    for (const auto &item : pending) {
+      if (item.first >= entities.size()) continue;
+      const auto it = names.find(item.second);
+      if (it == names.end() || it->second.empty()) continue;
+      entities[item.first].name = pool.str(it->second);
+    }
+  }
+
+  /* 把多线的基线 + 每顶点偏移方向展开成 N 条平行线。
+     `offsets` 有两种来源、量纲不同（实测的区别）：
+       - 顶点里的段参数（segParms 的第一个值）：**已经乘过 scale 了** → scaled=true
+         （实测 scale 1.5 的实体给出 ±0.75，scale 2.131 的给出 0 与 −2.131）
+       - MLINESTYLE 的元素偏移：是样式单位 → 还要乘实体的 scale → scaled=false */
+  void expand_mline(moz_cad_entity &e, const std::vector<double> &miter,
+                    const std::vector<double> &offsets, bool scaled) {
+    const size_t nverts = static_cast<size_t>(e.npoints);
+    if (nverts == 0 || miter.size() < nverts * 2 || offsets.empty()) return;
+    const double scale = scaled ? 1.0 : ((e.height != 0.0) ? e.height : 1.0);
+    std::vector<double> points;
+    std::vector<int> offsets_out;
+    for (double offset : offsets) {
+      for (size_t i = 0; i < nverts; ++i) {
+        push_point(points, e.points[i * 2] + miter[i * 2] * offset * scale,
+                   e.points[i * 2 + 1] + miter[i * 2 + 1] * offset * scale);
+      }
+      offsets_out.push_back(static_cast<int>(points.size() / 2));
+    }
+    e.points = pool.arr(points);
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.loop_offsets = pool.iarr(offsets_out);
+    e.nloops = static_cast<int>(offsets_out.size());
+  }
+
+  /* 样式的元素偏移：DWG 里实体的 styleName 常常没被上游解析出来（只有句柄），
+     所以按句柄查，查不到再按名字 */
+  bool mline_style_offsets(int handle, const std::string &style,
+                           std::vector<double> &out) const {
+    auto by_handle = mline_offsets_by_handle.find(handle);
+    if (by_handle != mline_offsets_by_handle.end() && !by_handle->second.empty()) {
+      out = by_handle->second;
+      return true;
+    }
+    auto by_name = mline_offsets.find(style);
+    if (by_name != mline_offsets.end() && !by_name->second.empty()) {
+      out = by_name->second;
+      return true;
+    }
+    return false;
+  }
+
+  /* 螺旋的折线采样：轴基点 + 半径*(cos t*u + sin t*v) + 轴单位向量*(turnHeight*t/2π)。
+     u 由"起点 − 轴基点"去掉轴分量得到，v = 轴 × u。2D 模型丢 z（垂直轴的螺旋在 xy
+     上就是一个圆，斜轴的是"弹簧"投影）。 */
+  void helix_points(moz_cad_entity &e, const DRW_Helix &data) {
+    std::vector<double> points;
+    const double radius = data.radius;
+    double ax = data.axisVector.x;
+    double ay = data.axisVector.y;
+    double az = data.axisVector.z;
+    double alen = std::sqrt(ax * ax + ay * ay + az * az);
+    if (!(alen > 1e-12)) {
+      ax = 0.0;
+      ay = 0.0;
+      az = 1.0;
+      alen = 1.0;
+    }
+    ax /= alen;
+    ay /= alen;
+    az /= alen;
+    /* 起点方向（去掉轴分量后归一化） */
+    double ux = data.startPt.x - data.axisBasePt.x;
+    double uy = data.startPt.y - data.axisBasePt.y;
+    double uz = data.startPt.z - data.axisBasePt.z;
+    const double along = ux * ax + uy * ay + uz * az;
+    ux -= along * ax;
+    uy -= along * ay;
+    uz -= along * az;
+    double ulen = std::sqrt(ux * ux + uy * uy + uz * uz);
+    if (!(ulen > 1e-12)) {
+      /* 起点落在轴上：随便取一个垂直方向 */
+      ux = (std::fabs(ax) < 0.9) ? 1.0 : 0.0;
+      uy = (std::fabs(ax) < 0.9) ? 0.0 : 1.0;
+      uz = 0.0;
+      const double dot = ux * ax + uy * ay + uz * az;
+      ux -= dot * ax;
+      uy -= dot * ay;
+      uz -= dot * az;
+      ulen = std::sqrt(ux * ux + uy * uy + uz * uz);
+    }
+    ux /= ulen;
+    uy /= ulen;
+    uz /= ulen;
+    const double vx = ay * uz - az * uy;
+    const double vy = az * ux - ax * uz;
+    const double turns = (data.turns > 0.0) ? data.turns : 1.0;
+    int parts = static_cast<int>(kHelixPartsPerTurn * turns);
+    if (parts < 8) parts = 8;
+    if (parts > kHelixMaxParts) parts = kHelixMaxParts;
+    const double direction = data.handedness ? 1.0 : -1.0;
+    for (int i = 0; i <= parts; ++i) {
+      const double t = direction * 2.0 * kPi * turns * static_cast<double>(i) / parts;
+      const double c = std::cos(t);
+      const double s = std::sin(t);
+      points.push_back(data.axisBasePt.x + radius * (c * ux + s * vx));
+      points.push_back(data.axisBasePt.y + radius * (c * uy + s * vy));
+    }
+    e.points = pool.arr(points);
+    e.npoints = static_cast<int>(points.size() / 2);
+    if (e.npoints == 0 || !(radius > 0.0)) warn("螺旋：半径是 0，没有可画的几何");
   }
 
   void flush_ignored() {
@@ -717,31 +864,318 @@ class Collector : public DRW_Interface {
     finish(e);
   }
 
+  /* 图片/遮罩的裁剪边界：边界点是**像素坐标**，映射到 WCS 是 base + u*px + v*py
+     （u/v 是"一像素"的向量，DXF 组码 11/12）。找不到边界就什么都不给。 */
+  void clip_to_world(moz_cad_entity &e, const DRW_Image &data) {
+    std::vector<double> points;
+    for (const DRW_Coord &c : data.clipPath) {
+      push_point(points, data.basePoint.x + data.secPoint.x * c.x + data.vVector.x * c.y,
+                 data.basePoint.y + data.secPoint.y * c.x + data.vVector.y * c.y);
+    }
+    if (points.size() >= 6) push_point(points, points[0], points[1]);   /* 闭合成环 */
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.loop_offsets = (e.npoints > 0) ? f.pool.iarr({e.npoints}) : nullptr;
+    e.nloops = (e.npoints > 0) ? 1 : 0;
+  }
+
   void addImage(const DRW_Image *data) override {
     if (!data) return;
     moz_cad_entity &e = begin(MOZ_CAD_IMAGE, *data);
     set_point(e.p1, data->basePoint);
-    set_point(e.p2, data->secPoint);          /* p2 是图片的 u 向量末端：画出来能标出图片位置 */
-    f.ignore("IMAGE（未取图片路径，只画了它的一条边）");
+    set_point(e.p2, data->secPoint);
+    /* 整幅边框（以前只画了一条边）：像素尺寸 × 一像素的 u/v 向量 */
+    if (data->sizeu != 0.0 && data->sizev != 0.0) {
+      std::vector<double> points;
+      const double ux = data->secPoint.x * data->sizeu;
+      const double uy = data->secPoint.y * data->sizeu;
+      const double vx = data->vVector.x * data->sizev;
+      const double vy = data->vVector.y * data->sizev;
+      push_point(points, data->basePoint.x, data->basePoint.y);
+      push_point(points, data->basePoint.x + ux, data->basePoint.y + uy);
+      push_point(points, data->basePoint.x + ux + vx, data->basePoint.y + uy + vy);
+      push_point(points, data->basePoint.x + vx, data->basePoint.y + vy);
+      push_point(points, data->basePoint.x, data->basePoint.y);
+      e.npoints = static_cast<int>(points.size() / 2);
+      e.points = f.pool.arr(points);
+      e.loop_offsets = f.pool.iarr({e.npoints});
+      e.nloops = 1;
+    } else {
+      f.warn("图片：上游没给像素尺寸（sizeu/sizev 是 0），只画了一条边");
+    }
+    e.flags |= MOZ_CAD_FLAG_APPROX;      /* 只有边框，没有载入像素 */
+    const size_t index = f.entities.size() - 1;
+    if (data->ref != 0) {
+      const int handle = static_cast<int>(data->ref);
+      auto it = f.image_names.find(handle);
+      if (it != f.image_names.end()) {
+        e.name = f.pool.opt(it->second);
+      } else {
+        f.pending_image_names.emplace_back(index, handle);
+      }
+    }
     finish(e);
   }
 
-  void linkImage(const DRW_ImageDef *data) override { (void)data; }
+  void linkImage(const DRW_ImageDef *data) override {
+    if (!data || data->handle == DRW::NoHandle) return;
+    f.image_names[static_cast<int>(data->handle)] = data->name;
+  }
   void addComment(const char *comment) override { (void)comment; }
   void addPlotSettings(const DRW_PlotSettings *data) override { (void)data; }
 
-  /* --- 上游会派发、但我们还没画的实体 ---
+  /* WIPEOUT：只有裁剪边界有意义（跟 IMAGE 共用实现）。边界点是**像素坐标**，
+     映射到 WCS 是 base + u向量*px + v向量*py（u/v 是"一像素"的向量，DXF 组码 11/12）。 */
+  void addWipeout(const DRW_Wipeout *data) override {
+    if (!data) return;
+    moz_cad_entity &e = begin(MOZ_CAD_WIPEOUT, *data);
+    clip_to_world(e, *data);
+    if (e.npoints < 3) {
+      f.warn("遮罩：上游没给可用的裁剪边界（DWG 里边界在 image-clip 块，可能没读到）");
+    } else {
+      e.flags |= MOZ_CAD_FLAG_APPROX;      /* 画的是裁剪边界，遮罩效果（填充）没有 */
+    }
+    finish(e);
+  }
+
+  /* 底图参照（PDF/DGN/DWF）：外部文件不渲染，按上游 LibreCAD 的做法画**裁剪边界**占位；
+     连裁剪边界都没有时画个十字标记（至少知道这里有个参照） */
+  void addUnderlay(const DRW_Underlay *data) override {
+    if (!data) return;
+    moz_cad_entity &e = begin(MOZ_CAD_UNDERLAY, *data);
+    set_point(e.p1, data->position);
+    e.rotation = data->rotation;
+    e.xscale = data->scale.x;
+    e.yscale = data->scale.y;
+    e.flags |= MOZ_CAD_FLAG_APPROX;
+    std::vector<double> points;
+    std::vector<int> offsets;
+    const std::vector<DRW_Coord> &boundary = data->clipBoundary.empty()
+                                                 ? data->inverseClipBoundary
+                                                 : data->clipBoundary;
+    if (!boundary.empty()) {
+      for (const DRW_Coord &c : boundary) push_point(points, c.x, c.y);
+      push_point(points, points[0], points[1]);           /* 闭合成环 */
+      offsets.push_back(static_cast<int>(points.size() / 2));
+    } else if (data->extPoint.x != 0.0 || data->extPoint.y != 0.0) {
+      /* 没有裁剪边界：至少把参照的范围框画出来（extPoint 是相对插入点的范围） */
+      push_point(points, data->position.x, data->position.y);
+      push_point(points, data->position.x + data->extPoint.x, data->position.y);
+      push_point(points, data->position.x + data->extPoint.x,
+                 data->position.y + data->extPoint.y);
+      push_point(points, data->position.x, data->position.y + data->extPoint.y);
+      push_point(points, data->position.x, data->position.y);
+      offsets.push_back(static_cast<int>(points.size() / 2));
+    } else {
+      double half = 0.5 * std::fabs(data->scale.x != 0.0 ? data->scale.x : 1.0);
+      if (!(half > 1e-9)) half = 0.5;
+      push_point(points, data->position.x - half, data->position.y);
+      push_point(points, data->position.x + half, data->position.y);
+      offsets.push_back(static_cast<int>(points.size() / 2));
+      push_point(points, data->position.x, data->position.y - half);
+      push_point(points, data->position.x, data->position.y + half);
+      offsets.push_back(static_cast<int>(points.size() / 2));
+    }
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.loop_offsets = f.pool.iarr(offsets);
+    e.nloops = static_cast<int>(offsets.size());
+    const size_t index = f.entities.size() - 1;
+    if (data->definitionHandle != 0) {
+      const int handle = static_cast<int>(data->definitionHandle);
+      auto it = f.underlay_names.find(handle);
+      if (it != f.underlay_names.end()) {
+        e.name = f.pool.opt(it->second);
+      } else {
+        f.pending_underlay_names.emplace_back(index, handle);
+      }
+    }
+    finish(e);
+  }
+
+  void linkUnderlay(const DRW_UnderlayDefinition *data) override {
+    if (!data || data->handle == DRW::NoHandle) return;
+    f.underlay_names[static_cast<int>(data->handle)] = data->filename;
+  }
+
+  /* 形（SHAPE）：字形在外部 .shx 文件里（上游只存元数据，不解释字形），
+     所以只能按插入点/比例画个占位标记——至少位置看得见 */
+  void addShape(const DRW_Shape &data) override {
+    moz_cad_entity &e = begin(MOZ_CAD_SHAPE, data);
+    set_point(e.p1, data.m_insertionPoint);
+    e.name = f.pool.opt(data.m_styleName);
+    e.height = data.m_scale;
+    e.rotation = data.m_rotation;             /* 类里是度 */
+    e.widthscale = data.m_widthFactor;
+    double half = std::fabs(data.m_scale) * 0.5;
+    if (!(half > 1e-9)) half = 0.5;           /* 比例没给就画个固定大小的小方块 */
+    const double ca = std::cos(e.rotation);
+    const double sa = std::sin(e.rotation);
+    std::vector<double> points;
+    for (int corner = 0; corner <= 4; ++corner) {
+      const int c = corner % 4;
+      const double sx = (c == 1 || c == 2) ? half : -half;
+      const double sy = (c >= 2) ? half : -half;
+      push_point(points, data.m_insertionPoint.x + sx * ca - sy * sa,
+                 data.m_insertionPoint.y + sx * sa + sy * ca);
+    }
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.flags |= MOZ_CAD_FLAG_APPROX;
+    finish(e);
+  }
+
+  /* 细分网格（MESH）：按**去重后的边**画线框（边优先，没有就按面拆边） */
+  void addMesh(const DRW_Mesh &data) override {
+    moz_cad_entity &e = begin(MOZ_CAD_MESH, data);
+    const int nverts = static_cast<int>(data.vertices.size());
+    std::set<std::pair<int, int>> seen;
+    std::vector<std::pair<int, int>> edges;
+    auto add_edge = [&](int a, int b) {
+      if (a < 0 || b < 0 || a >= nverts || b >= nverts || a == b) return;
+      const bool ordered = a < b;
+      const std::pair<int, int> key = ordered ? std::make_pair(a, b) : std::make_pair(b, a);
+      if (seen.insert(key).second) edges.push_back(key);
+    };
+    for (const auto &edge : data.edges) add_edge(edge.first, edge.second);
+    for (const auto &face : data.faces) {
+      for (size_t i = 0; i < face.size(); ++i) {
+        add_edge(face[i], face[(i + 1) % face.size()]);
+      }
+    }
+    std::vector<double> points;
+    std::vector<int> offsets;
+    for (const auto &edge : edges) {
+      push_point(points, data.vertices[static_cast<size_t>(edge.first)].x,
+                 data.vertices[static_cast<size_t>(edge.first)].y);
+      push_point(points, data.vertices[static_cast<size_t>(edge.second)].x,
+                 data.vertices[static_cast<size_t>(edge.second)].y);
+      offsets.push_back(static_cast<int>(points.size() / 2));
+    }
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.nloops = static_cast<int>(offsets.size());
+    e.loop_offsets = f.pool.iarr(offsets);
+    if (offsets.empty()) f.warn("网格：上游给的顶点/面里没有可画的边");
+    finish(e);
+  }
+
+  /* 多重引线（MLEADER）：引线折线 + 文字或块内容 */
+  void addMLeader(const DRW_MLeader *data) override {
+    if (!data) return;
+    const DRW_MLeaderAnnotContext &ctx = data->context;
+    moz_cad_entity &e = begin(MOZ_CAD_MLEADER, *data);
+    std::vector<double> points;
+    std::vector<int> offsets;
+    for (const DRW_MLeaderRoot &root : ctx.roots) {
+      for (const DRW_MLeaderLeaderLine &line : root.leaderLines) {
+        if (line.points.size() < 2) continue;
+        for (const DRW_Coord &p : line.points) push_point(points, p.x, p.y);
+        offsets.push_back(static_cast<int>(points.size() / 2));
+      }
+    }
+    e.npoints = static_cast<int>(points.size() / 2);
+    e.points = f.pool.arr(points);
+    e.nloops = static_cast<int>(offsets.size());
+    e.loop_offsets = f.pool.iarr(offsets);
+    e.height = ctx.textHeight;
+    if (ctx.hasTextContents) {
+      e.text = f.pool.opt(ctx.textLabel);
+      e.flags |= MOZ_CAD_FLAG_HAS_TEXT;
+      set_point(e.p1, ctx.textLocation);
+      e.rotation = ctx.textRotation;
+    } else if (ctx.hasContentsBlock && ctx.blockTableRecordHandle.ref != 0) {
+      /* 内容块的句柄是 BLOCK_RECORD：跟块参照一样按"块实体名"解（顺序不定 → 记账） */
+      const int handle = static_cast<int>(ctx.blockTableRecordHandle.ref);
+      auto it = f.block_entity_names.find(handle);
+      if (it != f.block_entity_names.end() && !it->second.empty()) {
+        e.name = f.pool.str(it->second);
+      } else {
+        f.pending_insert_names.emplace_back(f.entities.size() - 1, handle);
+      }
+      set_point(e.p1, ctx.blockLocation);
+      e.rotation = ctx.blockRotation;
+    }
+    if (e.npoints == 0 && e.text == nullptr && !ctx.hasContentsBlock) {
+      f.warn("多重引线：上游没给引线顶点，也没有文字/块内容");
+    }
+    finish(e);
+  }
+
+  /* 多线（MLINE）：N 条平行线。每条的偏移来自 MLINESTYLE 的 elements，
+     方向是该顶点的 miterDir（垂直方向）。样式后到就先记账，读完再展开。 */
+  void addMLineStyle(const DRW_MLineStyle &data) override {
+    std::vector<double> offsets;
+    for (const DRW_MLineElement &element : data.elements) offsets.push_back(element.offset);
+    f.mline_offsets[data.name] = offsets;
+    if (data.handle != DRW::NoHandle) {
+      f.mline_offsets_by_handle[static_cast<int>(data.handle)] = offsets;
+    }
+  }
+
+  void addMLine(const DRW_MLine *data) override {
+    if (!data) return;
+    moz_cad_entity &e = begin(MOZ_CAD_MLINE, *data);
+    e.name = f.pool.opt(data->styleName);
+    e.height = data->scale;                  /* 偏移要乘这个尺度 */
+    std::vector<double> base;
+    std::vector<double> miter;
+    for (const DRW_MLineVertex &v : data->vertlist) {
+      push_point(base, v.position.x, v.position.y);
+      double mx = v.miterDir.x;
+      double my = v.miterDir.y;
+      const double len = std::hypot(mx, my);
+      if (len > 0.0) {
+        mx /= len;
+        my /= len;
+      }
+      push_point(miter, mx, my);
+    }
+    e.npoints = static_cast<int>(base.size() / 2);
+    e.points = f.pool.arr(base);
+    const size_t index = f.entities.size() - 1;
+    const int handle = static_cast<int>(data->styleHandle);
+    /* 每条平行线的偏移：优先取**顶点里的段参数**（实体自带、已按 scale 折算过），
+       其次查 MLINESTYLE（样式单位，还得乘 scale）；都没有就先记账，读完再看样式到没到 */
+    std::vector<double> vertex_offsets;
+    for (const DRW_MLineVertex &v : data->vertlist) {
+      if (v.segParms.empty()) continue;
+      for (const std::vector<double> &parms : v.segParms) {
+        vertex_offsets.push_back(parms.empty() ? 0.0 : parms[0]);
+      }
+      break;
+    }
+    std::vector<double> style_offsets;
+    if (!vertex_offsets.empty()) {
+      f.expand_mline(e, miter, vertex_offsets, true);
+    } else if (f.mline_style_offsets(handle, data->styleName, style_offsets)) {
+      f.expand_mline(e, miter, style_offsets, false);
+    } else {
+      f.pending_mlines.push_back({index, data->styleName, handle, std::move(miter)});
+    }
+    if (e.npoints == 0) f.warn("多线：上游没给基线顶点");
+    finish(e);
+  }
+
+  /* --- 上游会派发、我们还没画的实体 ---
      这些回调在 DRW_Interface 里**有默认空实现**，所以不覆盖就不会报错、实体直接消失；
      上游确实会派发它们（DXF: libdxfrw.cpp:10079 addMLine / 10855 addHelix；
      DWG: dwgreader.cpp:9904 / 10257）。所以至少把数量说出来，不静默画空。 */
-  void addMLine(const DRW_MLine *data) override { (void)data; f.ignore("MLINE（多线）"); }
-  void addHelix(const DRW_Helix *data) override { (void)data; f.ignore("HELIX（螺旋）"); }
-  void addMLeader(const DRW_MLeader *data) override { (void)data; f.ignore("MLEADER（多重引线）"); }
-  void addShape(const DRW_Shape &data) override { (void)data; f.ignore("SHAPE（形）"); }
-  void addMesh(const DRW_Mesh &data) override { (void)data; f.ignore("MESH（网格）"); }
+  void addHelix(const DRW_Helix *data) override {
+    /* 螺旋：上游给了轴基点/起点/轴向量/半径/圈数/螺距，可以采样成折线 */
+    if (!data) return;
+    moz_cad_entity &e = begin(MOZ_CAD_HELIX, *data);
+    set_point(e.p1, data->axisBasePt);
+    set_point(e.p2, data->startPt);
+    set_point(e.p3, data->axisVector);
+    e.radius = data->radius;
+    e.height = data->turns;
+    e.ratio = data->turnHeight;
+    e.flags |= MOZ_CAD_FLAG_APPROX;      /* 3D 实体的 2D 投影（z 分量丢了） */
+    f.helix_points(e, *data);
+    finish(e);
+  }
   void addSurface(const DRW_Surface *data) override { (void)data; f.ignore("SURFACE（曲面）"); }
-  void addWipeout(const DRW_Wipeout *data) override { (void)data; f.ignore("WIPEOUT（遮罩）"); }
-  void addUnderlay(const DRW_Underlay *data) override { (void)data; f.ignore("UNDERLAY（底图参照）"); }
   void addProxyEntity(const DRW_ProxyEntity &data) override {
     (void)data;
     f.ignore("代理实体（上游不解其几何）");

@@ -88,9 +88,9 @@
       （P2/P3）见 **[2d-to-3d.md](2d-to-3d.md)**。
 - [x] **DXF/DWG 读出（N1）**：抽出 libdxfrw（**上游 2.0.0**，零 Qt、零 zlib）编成
       `libmozcadio.so`（C ABI `3rd/libdxfrw/moz/moz_cadio.{h,cc}` + `scripts/build_moz_cadio.sh`），
-      ctypes 绑定 `py/moz_cadio.py` 读成"规范化 2D 实体模型"（19 种图元 + 图层/线型/颜色/块/标注语义）；
+      ctypes 绑定 `py/moz_cadio.py` 读成"规范化 2D 实体模型"（**28 种图元** + 图层/线型/颜色/块/标注语义）；
       与 ezdxf 在模型空间上逐类对拍一致；真实 DWG 样本 **16 个全通**（R1.40–2018+，
-      `corpus/dwg/README.md`）；语料回归 `py/verify_cadio.py` **225 个文件：OK=213、EMPTY=10、
+      `corpus/dwg/README.md`）；语料回归 `py/verify_cadio.py` **225 个文件：OK=214、EMPTY=9、
       预期读不通 2、FAIL=0**；`.so` 随 wheel 分发并过 smoke test。实用发现：LibreCAD 树里那份
       libdxfrw 是 0.5.11 时代的拷贝（读不了 AC1018+ 且静默丢实体），所以构建源换成上游 2.0.0。
       详见 **[librecad-integration.md](librecad-integration.md)**。
@@ -99,15 +99,18 @@
       真曲线样条（有理 de Boor）、`--export-png/--export-svg/--report/--layers/--stats`（无显示器
       也能跑）；渲染层只认 `moz_cadio` 的规范化模型，DXF 读不通时 ezdxf 兜底；2.7 MB 整图 0.31 秒。
       **打开目录**后右侧「图纸」列表点着切换（`py/cadview_demo.py` 是随手可用版）；
-      46 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
+      48 个用例在 `py/tests/test_cadview.py`，随包带 `moz-cadview` 入口并过 smoke test。
       **匿名块名两处短板已修**（2026-09-28）：块参照的占位名（`*U19`→`*U`、`*T9`→`*T`）读完按
-      「块记录句柄 → 块实体名」重解析，DWG 标注块名上游根本不给时按"没被引用的 `*D…` 块"整体补画
-      （数量对得上才补，面板写明补了哪些）；**还没画的实体族**（MLEADER/MLINE/MESH/SHAPE/WIPEOUT/…）
-      现在都计数进面板——实测同一张样本里 15 个 MLEADER、3 个 MLINE、2 个 MESH 以前是静默丢掉的。
+      「块记录句柄 → 块实体名」重解析，DWG 标注块名拿不到时按"没被引用的 `*D…` 块"整体补画
+      （数量对得上才补，面板写明补了哪些）；**实体族**（MLEADER/MLINE/MESH/WIPEOUT/UNDERLAY/SHAPE/
+      HELIX/IMAGE）也从"只报数量"变成**真画出来**——实测同一张样本里 15 个 MLEADER、3 个 MLINE、
+      2 个 MESH 以前是静默丢掉的，语料里那张只有 MLEADER 的 DXF 以前整张判成空白。
 - [ ] **DWG 进"图纸 → 模型"（N3）**：`moz_dxf.Drawing` 从规范化实体模型构建，于是 DWG 也能走 P1。
-- [ ] **补画还没实现的实体族**：MLEADER（多重引线）、MLINE（多线，要按 `addMLineStyle` 的样式算每条
-      平行线偏移）、HELIX（螺旋）、MESH/SURFACE、WIPEOUT、UNDERLAY——现在有数量、有位置信息可查，
-      但几何还没画。
+- [ ] **没有几何数据的实体 → 补上**：①MLEADER 的**引线折点**（上游 DWG 解析没给，只有文字/内容块，
+      所以画出来没有指向被标注物的那根引线）；②SURFACE/代理实体的几何；③SHAPE 的字形（要外部 .shx
+      解析器）、IMAGE 的像素（要读图片文件）、UNDERLAY 的外部 PDF/DGN/DWF 内容。
+- [ ] **模型空间的"无限长线"按视图裁**：RAY/XLINE 现在按图纸尺度放大 20 倍拉长（场景包围盒会被它们
+      撑大，`Home`/适应视角时会显得空）。
 - [ ] **装配与运动**：间隙、配合、行程。
 - [ ] **自由曲面/NURBS**、**圆角/倒角**（OpenSCAD 无原生倒角）。
 - [ ] **公差与合格判定**（可检验性）。

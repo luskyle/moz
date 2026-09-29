@@ -49,6 +49,8 @@ __all__ = [
     "FLAG_HAS_TEXT",
     "FLAG_FIT_POINTS",
     "FLAG_TITLE",
+    "FLAG_APPROX",
+    "APPROX_NOTES",
     "bulge_arc_points",
     "ellipse_points",
     "entity_polylines",
@@ -87,6 +89,13 @@ KIND_NAMES = {
     19: "LEADER",
     20: "IMAGE",
     21: "VIEWPORT",
+    22: "MLEADER",
+    23: "MLINE",
+    24: "MESH",
+    25: "WIPEOUT",
+    26: "UNDERLAY",
+    27: "SHAPE",
+    28: "HELIX",
 }
 
 FLAG_CLOSED = 1 << 0
@@ -98,6 +107,18 @@ FLAG_MESH = 1 << 5
 FLAG_HAS_TEXT = 1 << 6
 FLAG_TITLE = 1 << 7
 FLAG_FIT_POINTS = 1 << 8    # SPLINE：points 是拟合点（上游没给控制点时的降级）
+# 画出来的是近似/占位（IMAGE 只有边框没有像素、UNDERLAY 只有裁剪边界、WIPEOUT 只有边界、
+# SHAPE 只有位置标记、HELIX 是 3D 实体的 2D 投影）——渲染层据此记一条说明，而不是当成完整几何
+FLAG_APPROX = 1 << 9
+
+# FLAG_APPROX 的实体"画了什么、缺了什么"——进 notes，让人一眼看出是近似而不是漏画
+APPROX_NOTES = {
+    "IMAGE": "按边框画的（位置/大小对；没载入图片像素）",
+    "UNDERLAY": "只画了裁剪边界（外部 PDF/DGN/DWF 不渲染）",
+    "WIPEOUT": "只画了裁剪边界（遮罩填充效果没有）",
+    "SHAPE": "只标了插入点（字形在外部 .shx 文件里，本层不解释）",
+    "HELIX": "按 2D 投影画（3D 螺旋的 z 分量丢掉了）",
+}
 
 BYLAYER = 256
 BYBLOCK = 0
@@ -814,9 +835,20 @@ def entity_polylines(entity, chord_tolerance=0.1):
     if kind == "LEADER":
         return [[entity.xy(i) for i in range(len(entity.points) // 2)]]      # 引线折点
     if kind == "IMAGE":
+        if entity.points:                                    # 整幅边框（points 是一个环）
+            return [loop for loop in entity.loop_points() if len(loop) > 1]
         return [[entity.p2d("p1"), entity.p2d("p2")]] if entity.p2d("p2") else []
     if kind == "HATCH":
         return [loop for loop in entity.loop_points() if len(loop) > 1]
+    if kind == "MLEADER" and entity.name:
+        return []            # 内容块：由 iter_draw 展开成块里的实体（跟 INSERT 一样）
+    if kind in ("MLEADER", "MLINE", "MESH", "WIPEOUT", "HELIX", "SHAPE", "UNDERLAY"):
+        loops = [loop for loop in entity.loop_points() if len(loop) > 1]
+        if loops:
+            return loops
+        # 没有 loop_offsets（MLINE 没查到样式、HELIX 是一条折线…）：points 本身就是折线
+        single = [entity.xy(i) for i in range(len(entity.points) // 2)]
+        return [single] if len(single) > 1 else []
     return []
 
 
@@ -875,6 +907,17 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
         if notes is not None and text not in notes:
             notes.append(text)
 
+    # 近似/占位画法的实体（IMAGE 只有边框、UNDERLAY 只有裁剪边界、SHAPE 只有位置标记…）：
+    # 逐条记进 notes，别让人以为画全了（理由表见 APPROX_NOTES）
+    approx = {}
+    approx_names = {}
+
+    def mark_approx(entity):
+        if entity.flags & FLAG_APPROX:
+            approx[entity.kind] = approx.get(entity.kind, 0) + 1
+            if entity.name:
+                approx_names.setdefault(entity.kind, entity.name)
+
     def walk(entities, matrix, depth, chain):
         for entity in entities:
             name = entity.name or ""
@@ -916,9 +959,20 @@ def iter_draw(cad, max_depth=8, missing=None, notes=None):
                         # 标注块的内容已经是最终位置（WCS），所以矩阵照传
                         yield from walk(block, matrix, depth + 1, chain + (name,))
                         continue
+            if entity.kind == "MLEADER" and name:
+                # 内容块的几何在块里（跟 INSERT 一样展开）；引线本身仍然要画 → 不 continue
+                block = children.get(name)
+                if block and depth < max_depth and name not in chain:
+                    yield from walk(block, matrix, depth + 1, chain + (name,))
+                elif not block:
+                    _note(missing, name)
+            mark_approx(entity)
             yield entity, matrix
 
     yield from walk(children.get("", []), IDENTITY_MATRIX, 0, ("",))
+    for kind, count in sorted(approx.items()):
+        extra = f"：{approx_names[kind]}" if kind in approx_names else ""
+        note(f"{count} 个 {kind} 是{APPROX_NOTES.get(kind, '近似画法')}{extra}")
     if compensate:
         note(f"{len(orphan_dims)} 个标注的图形按匿名块补画（"
              f"{', '.join(orphan_dims[:4])}{'…' if len(orphan_dims) > 4 else ''}）："

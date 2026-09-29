@@ -51,7 +51,15 @@ enum moz_cad_kind {
   MOZ_CAD_3DFACE,
   MOZ_CAD_LEADER,
   MOZ_CAD_IMAGE,
-  MOZ_CAD_VIEWPORT
+  MOZ_CAD_VIEWPORT,
+  /* 后加的（追加在尾部，前面那些的值不动） */
+  MOZ_CAD_MLEADER,    /* 多重引线：引线折点 + 文字/块内容 */
+  MOZ_CAD_MLINE,      /* 多线：N 条平行线（看 loop_offsets） */
+  MOZ_CAD_MESH,       /* 细分网格：线框（去重后的边，每条是两个点的环） */
+  MOZ_CAD_WIPEOUT,    /* 遮罩：裁剪边界（点已映射到 WCS） */
+  MOZ_CAD_UNDERLAY,   /* PDF/DGN/DWF 底图参照：裁剪边界（外部文件不渲染） */
+  MOZ_CAD_SHAPE,      /* 形：字形在外部 .shx 里，只给插入点/尺寸（画位置标记） */
+  MOZ_CAD_HELIX       /* 螺旋：按轴/半径/圈数/螺距采样的折线（2D 投影，丢掉 z） */
 };
 
 /* --- 图元标志位（moz_cad_entity.flags） --- */
@@ -64,7 +72,10 @@ enum moz_cad_flags {
   MOZ_CAD_FLAG_MESH = 1 << 5,      /* 多段线：网格/多面网格形态（本层不展开） */
   MOZ_CAD_FLAG_HAS_TEXT = 1 << 6,  /* 标注：有文字覆盖（group 1） */
   MOZ_CAD_FLAG_TITLE = 1 << 7,     /* 文字：TEXTGEN / 特殊形态，仅作记录 */
-  MOZ_CAD_FLAG_FIT_POINTS = 1 << 8 /* 样条：points 是**拟合点**（没有控制点时的降级） */
+  MOZ_CAD_FLAG_FIT_POINTS = 1 << 8, /* 样条：points 是**拟合点**（没有控制点时的降级） */
+  MOZ_CAD_FLAG_APPROX = 1 << 9     /* 画出来的是**近似/占位**（IMAGE 只有边框没有像素、
+                                      UNDERLAY 只有裁剪边界、WIPEOUT 只有边界没有遮罩效果、
+                                      SHAPE 只有位置标记——字形在外部 .shx 里） */
 };
 
 /* --- 一个图元（POD） ---
@@ -93,6 +104,19 @@ enum moz_cad_flags {
  *                     bulge 都按 16 段采样，样条跳过并计告警），环的边界看 loop_offsets
  *                     （前缀和，nloops 个）
  *   SOLID/TRACE/3DFACE  p1..p3 顶点
+ *   MLEADER           points/loop_offsets 是各条引线折线（每条一段），text/height/rotation
+ *                     是文字内容（HAS_TEXT 时有效，p1 = 文字位置）；块内容时 name 是内容块名、
+ *                     p1 = 块插入点
+ *   MLINE             name 样式名，height 是 scale；**样式查得到**时 points/loop_offsets 是
+ *                     N 条平行线（每条一段），查不到时 points 只有基线、nloops = 0
+ *   MESH              points/loop_offsets 是线框的边（每条边一段，两个点）
+ *   WIPEOUT           points/loop_offsets 是裁剪边界（已映射到 WCS）
+ *   UNDERLAY          name 是外部文件名（可能为 NULL = 定义对象没读到），p1 插入点，
+ *                     rotation/xscale/yscale，points 是裁剪边界（可为空）
+ *   SHAPE             p1 插入点，name 样式名，height 是比例，rotation 旋转；
+ *                     字形在外部 .shx 文件里，本层不解释
+ *   HELIX             p1 轴基点、p2 起点、p3 轴向量，radius/height(turns)/ratio(turnHeight)，
+ *                     points 是采样出来的折线（2D 投影）
  */
 typedef struct moz_cad_entity {
   int kind;              /* MOZ_CAD_* */

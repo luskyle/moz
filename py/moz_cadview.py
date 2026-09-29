@@ -355,6 +355,24 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
             pen.setDashPattern(list(pattern))
         return pen
 
+    def text_item(entity, matrix):
+        """文字项（TEXT/MTEXT/MLEADER 共用）：位置按变换走，字高按像素给（视图 Y 翻转要翻回来）。"""
+        text = (entity.text or "").replace("\\P", "\n").split("\n")[0]
+        if not text or not entity.p1:
+            return None
+        position = moz_cadio.matrix_apply(matrix, entity.p1)
+        scale = math.hypot(matrix[0], matrix[3]) or 1.0
+        turn = math.atan2(matrix[3], matrix[0])        # 块变换带来的旋转
+        item = QGraphicsSimpleTextItem(text)
+        font = QFont()
+        font.setPixelSize(max(1, int(round(entity.height or 2.5))))
+        item.setFont(font)
+        item.setBrush(QBrush(colour_for(entity)))
+        item.setPos(QPointF(position[0], position[1]))
+        item.setRotation(-math.degrees(entity.rotation + turn))
+        item.setTransform(QTransform().scale(scale, -scale), True)
+        return item
+
     def add(item, entity, *, to_scene=True):
         if to_scene:
             scene.addItem(item)
@@ -362,36 +380,9 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
         counts[entity.kind] = counts.get(entity.kind, 0) + 1
         return item
 
-    scale_box = _drawing_extent(cad)
-    missing, notes = [], []
-    for entity, matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
-        if entity.kind in ("TEXT", "MTEXT"):
-            text = (entity.text or "").split("\n")[0]
-            if not text or not entity.p1:
-                continue
-            position = moz_cadio.matrix_apply(matrix, entity.p1)
-            scale = math.hypot(matrix[0], matrix[3]) or 1.0
-            turn = math.atan2(matrix[3], matrix[0])        # 块变换带来的旋转
-            item = QGraphicsSimpleTextItem(text)
-            font = QFont()
-            font.setPixelSize(max(1, int(round(entity.height or 2.5))))
-            item.setFont(font)
-            item.setBrush(QBrush(colour_for(entity)))
-            item.setPos(QPointF(position[0], position[1]))
-            item.setRotation(-math.degrees(entity.rotation + turn))
-            # 视图 Y 翻转，文字要翻回来（缩放也跟着块变换走）
-            item.setTransform(QTransform().scale(scale, -scale), True)
-            add(item, entity)
-            continue
-        if entity.kind == "POINT":
-            if not entity.p1:
-                continue
-            centre = moz_cadio.matrix_apply(matrix, entity.p1)
-            radius = max(0.05, scale_box * 0.0015)
-            item = scene.addEllipse(centre[0] - radius, centre[1] - radius,
-                                    radius * 2, radius * 2, pen_for(entity))
-            add(item, entity, to_scene=False)      # addEllipse 已经把它加进场景了
-            continue
+    def paths_for(entity, matrix):
+        """一个图元的折线项（返回已加进场景的 item 列表）。"""
+        items = []
         for chain in _chains_for(entity, matrix, scale_box, chord_tolerance):
             if len(chain) < 2:
                 continue
@@ -402,10 +393,45 @@ def build_scene(cad, *, chord_tolerance=0.05, aci_table=None, dark=True):
                 path.closeSubpath()
             if entity.kind in ("SOLID", "TRACE", "3DFACE") or (entity.kind == "HATCH"
                                                                and entity.solid):
-                item = scene.addPath(path, pen_for(entity), QBrush(colour_for(entity)))
+                items.append(scene.addPath(path, pen_for(entity), QBrush(colour_for(entity))))
             else:
-                item = scene.addPath(path, pen_for(entity))
-            add(item, entity, to_scene=False)      # addPath 已经加进场景了
+                items.append(scene.addPath(path, pen_for(entity)))
+        return items
+
+    scale_box = _drawing_extent(cad)
+    missing, notes = [], []
+    for entity, matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
+        if entity.kind == "MLEADER":
+            # 多重引线：文字 + 引线折线（内容块的实体已经由 iter_draw 展开）——算**一个**图元
+            items = []
+            text = text_item(entity, matrix)
+            if text is not None:
+                scene.addItem(text)
+                items.append(text)
+            items.extend(paths_for(entity, matrix))
+            if items:
+                per_layer.setdefault(entity.layer, []).extend(items)
+                counts[entity.kind] = counts.get(entity.kind, 0) + 1
+            continue
+        if entity.kind in ("TEXT", "MTEXT"):
+            text = text_item(entity, matrix)
+            if text is not None:
+                add(text, entity)
+            continue
+        if entity.kind == "POINT":
+            if not entity.p1:
+                continue
+            centre = moz_cadio.matrix_apply(matrix, entity.p1)
+            radius = max(0.05, scale_box * 0.0015)
+            item = scene.addEllipse(centre[0] - radius, centre[1] - radius,
+                                    radius * 2, radius * 2, pen_for(entity))
+            add(item, entity, to_scene=False)      # addEllipse 已经把它加进场景了
+            continue
+        items = paths_for(entity, matrix)
+        if items:
+            # 计数按**图元**算（一个多线展开成 N 条平行线仍算 1 个图元），面板里读起来对得上
+            per_layer.setdefault(entity.layer, []).extend(items)
+            counts[entity.kind] = counts.get(entity.kind, 0) + 1
     if not counts and not per_layer:
         _add_empty_notice(scene, missing, notes, dark, cad.warnings)
     return scene, per_layer, counts, missing, notes
@@ -1018,10 +1044,17 @@ def drawable_count(cad, missing=None, notes=None):
     """"画得出来"的图元数——判据与 :func:`build_scene` 一致（画不出东西的实体不算）。"""
     total = 0
     for entity, _matrix in moz_cadio.iter_draw(cad, missing=missing, notes=notes):
-        if entity.kind in ("TEXT", "MTEXT"):
+        if entity.kind == "MLEADER":
+            # 多重引线算一个：有文字就算画得出来，引线折线也算
+            total += 1 if ((entity.text or "").strip()
+                           or any(len(chain) >= 2
+                                  for chain in moz_cadio.entity_polylines(entity))) else 0
+        elif entity.kind in ("TEXT", "MTEXT"):
             total += 1 if (entity.text or "").strip() else 0
         elif entity.kind == "POINT":
             total += 1 if entity.p1 else 0
+        elif entity.kind == "UNDERLAY":
+            total += 1 if entity.p1 else 0      # 没有裁剪边界时画的是插入点标记
         elif entity.kind in ("RAY", "XLINE"):
             # 无限长线由渲染层按图纸尺度拉长（`entity_polylines` 故意不返回它们）
             total += 1 if (entity.p1 and entity.p2) else 0

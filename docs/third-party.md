@@ -51,20 +51,39 @@
   `*U19` → `*U`、`*T9` → `*T`），这类块参照查不到块定义、整块画不出来。**解法**：读完整张图后按
   「块记录句柄 → 块实体名」重查一遍（`3rd/libdxfrw/moz/moz_cadio.cc` 的 `resolve_pending()`），
   实测 16 个 DWG 样本里的块参照全部落到真实块定义上（`py/tests/test_cadio.py` 钉住了这项）。
-- **已知的上游限制（DWG 标注的块名拿不到）**：`DRW_Dimension::parseDwg` 把标注的块句柄置成空句柄
-  后再没填过（实测块句柄恒为 0），所以 DWG 里标注实体的块名**永远是空的**，而标注的线/箭头/文字
-  都在那个匿名块里。这些块本身在文件里（`*D…`）、没被任何地方引用、几何已经是最终位置（WCS，
+- **已知的上游限制（DWG 标注的块名拿不到）**：标注实体本身只有 `dimtype`/定义点/文字，画标注的
+  线/箭头/文字全在它的**匿名块**（`*D…`）里，而块名要靠标注的"块句柄"查。上游**有**读这个字段
+  （`DRW_Dimension::parseDwgDimensionHandles` 把两个句柄都读出来），但实测这几张 ACadSharp 样本里
+  那个句柄是**空句柄**（块句柄恒为 0，而同一次读出的 dimstyle 句柄是正常的 → 不是读歪了），所以
+  名字确实拿不到。那些 `*D` 块本身在文件里、**没被任何地方引用**、几何已经是最终位置（WCS，
   实测块内点与标注定义点重合 0.000）。**解法**：绘制侧按"没被引用的 `*D` 块"整体补画，且只在
-  「无名标注数 ≥ 候选块数」时才做（数量对得上才敢认定）；对不上就只报告、不猜
+  「无名标注数 ≥ 候选块数」时才做（实测 11:11 对得上）；对不上就只报告、不猜
   （`py/moz_cadio.py` 的 `iter_draw`，面板里会写明这次补画了哪些块）。
-- **我们还没画的实体族（上游会派发、`DRW_Interface` 给的是默认空实现）**：MLINE（多线）、
-  HELIX（螺旋）、MLEADER（多重引线）、SHAPE（形）、MESH（网格）、SURFACE（曲面）、WIPEOUT（遮罩）、
-  UNDERLAY（底图参照）、代理实体。**这些回调不是纯虚**，不覆盖就等于静默丢几何（上游确实会派发它们：
-  DXF 侧 `libdxfrw.cpp:10079`/`10855`，DWG 侧 `intern/dwgreader.cpp:9904`/`10257`）。现在**统一报数量**
-  （`忽略 N 个MLEADER（多重引线）` 这样进面板），`py/tests/test_cadio.py` 用手写的最小 DXF 钉住
-  HELIX/MLINE 两条。实测 ACadSharp 那张版本阶梯样本每张就含 **15 个 MLEADER、3 个 MLINE、2 个 MESH、
-  1 个 SHAPE、1 个 UNDERLAY、1 个 WIPEOUT**——以前全都不声不响地没了。**画出来还没做**：
-  MLINE 要按样式算每条平行线的偏移（样式在 `addMLineStyle`，我们没取），MLEADER 要解析 context。
+- **以前静默丢掉、现在画出来了的实体族**（`DRW_Interface` 里这些回调**有默认空实现**，不覆盖就等于
+  丢几何；上游确实会派发它们：DXF 侧 `libdxfrw.cpp:10079`/`10855`，DWG 侧 `intern/dwgreader.cpp:9904`/
+  `10257`）：**MLINE**（多线→N 条平行线）、**MLEADER**（多重引线→引线折线+文字/内容块）、**MESH**
+  （细分网格→去重后的边线框）、**WIPEOUT**（遮罩→裁剪边界）、**UNDERLAY**（PDF/DGN/DWF→裁剪边界占位）、
+  **SHAPE**（形→插入点标记）、**HELIX**（螺旋→按轴/半径/圈数采样）、**IMAGE**（图片→整幅边框）。
+  实测 ACadSharp 那张版本阶梯样本每张含 **15 个 MLEADER、3 个 MLINE、2 个 MESH、1 个 SHAPE、
+  1 个 UNDERLAY、1 个 WIPEOUT、1 个 IMAGE**，以前全都不声不响地没了；语料里还有一张**模型空间只有
+  MLEADER** 的 DXF（`dxf-parser/test__data__mleader.dxf`）以前整张判成空白，现在正常。
+- **这些实体的实现细节（都实测过）**：
+  - **多线的偏移量纲**：DWG 每个顶点的段参数（`DRW_MLineVertex::segParms` 的第一个值）**已经乘过
+    `scale`**（实测 scale 1.5 的实体给出 ±0.75），而 MLINESTYLE 的元素偏移是样式单位、还要乘 `scale`；
+    我们优先用顶点参数（两种格式都带），样式作兜底。实测三条多线展开出的两条平行线在**每个顶点**都
+    恰好相隔一个 `scale` ✓。另外 R14（≤AC1014）的 DWG 布局里**没有**多线的样式句柄（上游编码器同样
+    `if (version > DRW::AC1014)`）。
+  - **标注的块句柄**（回看上面那条）：这几张 ACadSharp 样本的标注里块句柄是**空句柄**（块句柄读出来
+    恒为 0，而 dimstyle 句柄正常——所以不是读歪了），那些 `*D` 块因此是"没人引用的"孤儿；绘制侧按
+    "无名标注数 ≥ 未被引用的 `*D` 块数"整体补画，并在面板里写明。
+  - **外部参照的名字是后到的**：IMAGE/UNDERLAY 实体在读实体段时来、`IMAGEDEF`/`UNDERLAYDEFINITION`
+    对象在对象段才到（上游注释也这么说），所以名字要**读完再解析**（跟块名同一套路），拿到后进
+    `name`（面板里能看到具体的 .jpg/.pdf 文件名）。同理 MLINESTYLE 也要等读完。
+  - **MLEADER 的引线折点上游没给**：`DRW_MLeaderAnnotContext::roots` 是空的（实测 15/15 只有文字），
+    所以画的是文字+内容块、没有那根指向被标注物的引线；这是上游 DWG 解析的缺口，记在
+    `docs/roadmap.md`。
+- **还没画的**：SURFACE（曲面）与代理实体（上游不解其几何）——仍然**计数报出来**，不静默；
+  SHAPE 的字形、IMAGE 的像素、PDF/DGN/DWF 底图内容都需要外部文件/字体，本层不解释（画占位并说明）。
 - 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
   `screw2012binary.dxf`（对象段两个版本都读不了：0.5.11 报 `BAD_READ_SECTION`、2.0.0 报
   `BAD_READ_OBJECTS`；ezdxf 读它没问题）、`nothing-decimal-comma-separated.dxf`（小数逗号，

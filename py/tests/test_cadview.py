@@ -217,6 +217,36 @@ def test_dwg_scene_has_curves_and_hatches(cadview, qt_app):
     assert {"LINE", "HATCH", "SPLINE", "CIRCLE"} <= set(counts)
 
 
+def test_dwg_entity_families_reach_the_scene(cadview, qt_app):
+    """整族实体以前在面板里是"忽略 N 个…"，现在是**画出来的东西**（且不再有告警）。
+
+    计数按图元算：3 个多线展开成 6 条平行线，但面板里记 MLINE 3。
+    """
+    path = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    cad, scene, _per_layer, counts, missing = scene_of(cadview, path)
+    assert not missing and not cad.warnings, (missing, cad.warnings)
+    assert {"MESH", "MLINE", "MLEADER", "WIPEOUT", "UNDERLAY", "SHAPE", "IMAGE"} <= set(counts)
+    assert counts["MLINE"] == 3 and counts["MESH"] == 2
+    assert counts["MLEADER"] == 15
+    assert len(scene.items()) > 200
+
+
+def test_only_mleader_drawing_is_no_longer_blank(cadview, qt_app):
+    """语料里那张只有 MLEADER 的图以前判成"空白"（`drawable_count` 为 0），现在画得出来。"""
+    path = CORPUS / "dxf-parser" / "test__data__mleader.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    cad = cadview.load(str(path))
+    assert cadview.drawable_count(cad) > 0
+    _scene, _per_layer, counts, missing, notes = cadview.build_scene(cad)
+    assert counts.get("MLEADER", 0) >= 1 and not missing
+    assert not notes                                             # 多重引线是完整几何，不需要说明
+    texts = [item.text() for item in _scene.items() if hasattr(item, "text")]
+    assert texts
+
+
 # --- 目录与"方便打开"（图纸列表、点击切换、拖拽、demo） ---
 
 
@@ -513,9 +543,12 @@ def test_problem_panel_shows_the_whole_story(cadview, qt_app):
     if dwg.exists():
         view.open_path(str(dwg))
         text = view.report.toPlainText()
-        assert "读取时的告警" in text and "推断出来的" in text
+        # 这张图现在**读得干净**：没画出来的、读取告警都没有，只剩"推断/近似"说明
+        assert "推断出来的" in text
         assert "标注的图形按匿名块补画" in text
-        assert "没画出来的原因" not in text                  # 这张图的块参照/标注块都解析出来了
+        assert "1 个 SHAPE 是只标了插入点" in text and "1 个 WIPEOUT" in text   # 近似画法说明
+        assert "没画出来的原因" not in text
+        assert "读取时的告警" not in text
         assert len(text) > len(view.window.statusBar().currentMessage())   # 面板比状态栏详细
 
 

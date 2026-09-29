@@ -7,6 +7,7 @@
 ``py/tests/test_dxf.py`` 的模块文档）。
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -293,36 +294,88 @@ def test_dwg_insert_names_are_not_truncated(cadio):
     assert "*T9" in definitions and "*T9" in set(names)
 
 
-def test_unsupported_entities_are_counted_not_silently_dropped(cadio, tmp_path):
-    """我们还没画的实体族（MLINE 多线、HELIX 螺旋）要**报出数量**，不能默默消失。
+def test_helix_is_drawn_from_axis_and_turns(cadio, tmp_path):
+    """HELIX（螺旋）：上游给了轴基点/起点/轴向量/半径/圈数，按它采样成折线画出来。
 
-    关键事实：`DRW_Interface` 里这些回调**有默认空实现**（不是纯虚），上游也确实会派发
-    （DXF: libdxfrw.cpp:10079/10855）——所以不覆盖就等于静默丢几何。这里手写最小 DXF
-    把两件事一起钉住：同一套控制点做成 SPLINE 是画得出来的（证明 DXF 结构没问题），
-    换成 HELIX/MLINE 则只有计数告警。
+    以前它和 MLINE/MLEADER 一样被接口的**默认空实现**静默丢掉。这里手写最小 DXF 钉住几何：
+    轴是 (0,0,1)、起点 (1,0,0)、半径 5 → 每个点到轴基点的 xy 距离都应当是 5（垂直轴的螺旋
+    在 xy 上就是个圆，2D 投影）。
     """
     knots = "".join(f"40\n{value}\n" for value in (0, 0, 0, 0, 1, 1, 1, 1))
     controls = "".join(f"10\n{x}\n20\n{y}\n30\n0\n"
                        for x, y in ((0, 0), (1, 0), (2, 1), (3, 1)))
-    spline_body = "71\n3\n72\n8\n73\n4\n" + knots + controls
-    header, tail = "0\nSECTION\n2\nENTITIES\n0\n", "0\nENDSEC\n0\nEOF\n"
+    body = ("71\n3\n72\n8\n73\n4\n" + knots + controls
+            + "100\nAcDbHelix\n90\n29\n91\n0\n10\n0\n20\n0\n30\n0\n"
+              "11\n1\n21\n0\n31\n0\n12\n0\n22\n0\n32\n1\n40\n5\n41\n3\n42\n1\n")
+    path = tmp_path / "helix.dxf"
+    path.write_text("0\nSECTION\n2\nENTITIES\n0\nHELIX\n8\n0\n100\nAcDbSpline\n70\n0\n"
+                    + body + "0\nENDSEC\n0\nEOF\n", encoding="utf-8")
+    cad = cadio.read(str(path))
+    assert not cad.warnings
+    helix, = modelspace(cad)
+    assert helix.kind == "HELIX" and helix.flags & cadio.FLAG_APPROX
+    assert (helix.radius, helix.height) == (5.0, 3.0)           # 半径、圈数
+    points = [helix.xy(i) for i in range(len(helix.points) // 2)]
+    assert len(points) > 100                                    # 每圈 48 段、3 圈
+    assert all(abs(math.hypot(x, y) - 5.0) < 1e-9 for x, y in points)
+    assert len(cadio.entity_polylines(helix)) == 1
 
-    def read(name, body):
-        path = tmp_path / name
-        path.write_text(header + body + tail, encoding="utf-8")
-        return cadio.read(str(path))
 
-    spline = read("control.dxf", "SPLINE\n8\n0\n100\nAcDbSpline\n70\n0\n" + spline_body)
-    assert kinds(modelspace(spline)) == {"SPLINE": 1} and not spline.warnings
+def test_dxf_mleader_only_drawing_is_not_blank(cadio):
+    """模型空间里**只有 MLEADER** 的图（语料实测 `dxf-parser/test__data__mleader.dxf`）。
 
-    helix = read("helix.dxf",
-                 "HELIX\n8\n0\n100\nAcDbSpline\n70\n0\n" + spline_body
-                 + "100\nAcDbHelix\n90\n29\n91\n0\n10\n0\n20\n0\n30\n0\n"
-                   "11\n1\n21\n0\n31\n0\n12\n0\n22\n0\n32\n1\n40\n5\n41\n3\n42\n1\n")
-    assert modelspace(helix) == []
-    assert any("1 个HELIX" in text for text in helix.warnings), helix.warnings
+    以前这些实体被接口的默认空实现吞掉，整张图判成"空白"；现在它算画得出来，文字也在。
+    """
+    path = CORPUS / "dxf-parser" / "test__data__mleader.dxf"
+    if not path.exists():
+        pytest.skip("DXF 语料缺失")
+    cad = cadio.read(str(path))
+    leaders = modelspace(cad)
+    assert leaders and all(entity.kind == "MLEADER" for entity in leaders)
+    assert any((entity.text or "").strip() for entity in leaders)
 
-    mline = read("mline.dxf", "MLINE\n8\n0\n2\nSTANDARD\n70\n0\n71\n1\n"
-                              "11\n0\n21\n0\n31\n0\n11\n10\n21\n0\n31\n0\n")
-    assert modelspace(mline) == []
-    assert any("1 个MLINE" in text for text in mline.warnings), mline.warnings
+
+def test_dwg_entity_families_are_drawn(cadio):
+    """MESH/MLINE/MLEADER/WIPEOUT/UNDERLAY/SHAPE/IMAGE 从"只报数量"变成**真画出来**。
+
+    这是 ACadSharp 那张版本阶梯样本（每张都含 15 个 MLEADER、3 个 MLINE、2 个 MESH…）：
+    `DRW_Interface` 里这些回调有默认空实现，不覆盖就是静默丢几何。这里逐族钉住读到的几何。
+    """
+    cad = cadio.read(dwg("samples__sample_AC1015.dwg"))
+    assert not cad.warnings, cad.warnings
+    assert {"MESH", "MLINE", "MLEADER", "WIPEOUT", "UNDERLAY", "SHAPE", "IMAGE"} <= set(
+        kinds(modelspace(cad)))
+
+    # 多线：展开成 N 条平行线，实测两条线在**每个顶点**都相隔一个 scale（标准样式 ±0.5 偏移）
+    mlines = cad.by_kind("MLINE")
+    assert len(mlines) == 3
+    for mline in mlines:
+        loops = [loop for loop in mline.loop_points() if len(loop) > 1]
+        assert len(loops) == 2
+        for first, second in zip(loops[0], loops[1], strict=True):
+            assert math.dist(first, second) == pytest.approx(mline.height, rel=1e-9)
+
+    # 网格：按去重后的边画线框（每条边两个点）
+    for mesh in cad.by_kind("MESH"):
+        assert mesh.nloops > 100 and all(len(loop) == 2 for loop in mesh.loop_points())
+
+    # 多重引线：文字内容读到了（引线折点上游没给，见 docs/third-party.md）
+    assert sum(1 for entity in cad.by_kind("MLEADER") if entity.text) == 15
+
+    # 图片：整幅边框（5 点闭环）+ 名字来自 IMAGEDEF
+    image, = cad.by_kind("IMAGE")
+    assert len(image.points) // 2 == 5 and image.name.lower().endswith(".jpg")
+
+    # 遮罩：裁剪边界是闭合多边形（像素坐标已映射到 WCS）
+    wipeout, = cad.by_kind("WIPEOUT")
+    assert len(wipeout.points) // 2 == 5 and wipeout.nloops == 1
+    assert wipeout.points[0:2] == wipeout.points[-2:]           # 首尾同点 = 闭合
+
+    # 底图参照：裁剪边界/十字标记 + 外部文件名（定义对象后到 → 读完再解析）
+    underlay, = cad.by_kind("UNDERLAY")
+    assert underlay.nloops >= 1 and underlay.name.lower().endswith(".pdf")
+    assert underlay.flags & cadio.FLAG_APPROX
+
+    # 形（SHAPE）：字形在外部 .shx 里，画的是插入点上的标记（标注里说明）
+    shape, = cad.by_kind("SHAPE")
+    assert shape.flags & cadio.FLAG_APPROX and len(shape.points) // 2 == 5

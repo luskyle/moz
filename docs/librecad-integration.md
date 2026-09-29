@@ -133,11 +133,11 @@ void          moz_cad_free(moz_cad_file *f);
 | 验收项 | 结果 |
 | --- | --- |
 | C ABI + driver | `3rd/libdxfrw/moz/moz_cadio.{h,cc}`（8 个函数、POD 记录、借用缓冲、错误带原因），`scripts/build_moz_cadio.sh` 一个命令编出 `build/lib/libmozcadio.so`（约 30 秒，**不需要** Qt/内核） |
-| Python 绑定 | `py/moz_cadio.py`（ctypes + 规范化模型：19 种图元、图层/块/颜色/线型、`report()`/`counts()`/`by_layer()`） |
+| Python 绑定 | `py/moz_cadio.py`（ctypes + 规范化模型：28 种图元、图层/块/颜色/线型、`report()`/`counts()`/`by_layer()`） |
 | 与 ezdxf 交叉核对 | 三个样例图纸的**模型空间逐类一致**（plate/bracket/messy：`CIRCLE 4+DIMENSION 2+LINE 8` 等），圆坐标/半径逐个一致，图层名集合一致，标注文字与 `dxf_dim` 名一致 |
 | DWG | 16 个真实样本全通（AC1014→AC1032 版本阶梯 + 编码页 + 多边形/径向标注/富文本），见 `corpus/dwg/README.md` |
-| 语料回归 | `py/verify_cadio.py`：**225 个文件，OK=213、EMPTY=10、预期读不通 2、FAIL=0** |
-| 单元测试 | `py/tests/test_cadio.py` 29 个用例（交叉核对/边界/错误路径/DWG 阶梯） |
+| 语料回归 | `py/verify_cadio.py`：**225 个文件，OK=214、EMPTY=9、预期读不通 2、FAIL=0** |
+| 单元测试 | `py/tests/test_cadio.py` 36 个用例（交叉核对/边界/错误路径/DWG 阶梯/实体族几何） |
 | 打包 | `.so` 进 wheel（`moz_data/lib/libmozcadio.so`）+ `scripts/smoke_installed.py` 在干净 venv 里验过（含"必须用随包那份 .so"的断言） |
 | 实测改掉的两个判断 | ① 构建源从 LibreCAD 树里的 0.5.11 换成**上游 2.0.0**（老那份读不了 AC1018+ 且静默丢实体）；② 逗号小数的图上游会**直接拒绝**（与引擎/`moz_dxf` 态度一致），所以不需要我们再做启发式告警 |
 
@@ -148,15 +148,16 @@ void          moz_cad_free(moz_cad_file *f);
 | 直画看图器 | `py/moz_cadview.py`：QGraphicsScene 直画（折线/填充/文字/点），块与标注展开、图层开关面板、ACI/真彩/BYLAYER 颜色、线型近似、文字带旋转；入口 `moz-cadview`（也可 `python3 py/moz_cadview.py`） |
 | 渲染层只认模型 | `load()` 先 libdxfrw，DXF 读不通换 ezdxf 兜底（实测上游读不了那个二进制样本的对象段，兜底顶上并给告警）——两条解析路径产出同一种 `CadFile` |
 | 离散口径 | 弧/椭圆按弦高容差、bulge 展开、样条是**有理 de Boor**（RATIONAL 带权重）；与 P1 共用同一套 `entity_polylines`，不出现"两套口径" |
-| 不静默 | 块参照查不到定义、剖面线没有边界环（MPOLYGON）、**我们还没画的实体族**（MLEADER/MLINE/MESH/SHAPE/WIPEOUT/UNDERLAY/代理实体…）都会报出来并计数——`DRW_Interface` 这些回调**有默认空实现**，不覆盖就是静默丢几何 |
-| 匿名块名（2026-09-28 修复） | 上游的两处 DWG 短板都堵上了：①块参照的占位名（`*U19`→`*U`、`*T9`→`*T`）读完按「块记录句柄 → 块实体名」重解析（`resolve_pending()`），实测 16 个样本的块参照全部落到真实块定义；②标注块名上游根本不给（`DRW_Dimension::parseDwg` 不读块句柄），绘制侧按"没被引用的 `*D` 块"整体补画，且只在数量对得上时才补（详见 [third-party.md](third-party.md)） |
+| 不静默 | 剖面线没有边界环（MPOLYGON）、上游给不出几何的实体（SURFACE/代理实体）都会**计数报出来**；实在没数据的（图片像素、.shx 字形、PDF/DGN/DWF 内容）画占位并在面板的"推断"里写明缺了什么 |
+| 实体族（2026-09-28 补齐） | 以前被默认空实现静默丢掉的 **MLINE/MLEADER/MESH/WIPEOUT/UNDERLAY/SHAPE/HELIX/IMAGE** 全部**画出来了**：多线展开成 N 条平行线（实测两线间距 = scale ✓）、多重引线给文字+内容块、网格按去重边画线框、遮罩/底图按裁剪边界、图片画整幅边框、螺旋按轴采样；其余细节见 [third-party.md](third-party.md) |
+| 匿名块名（2026-09-28 修复） | 上游的两处 DWG 短板都堵上了：①块参照的占位名（`*U19`→`*U`、`*T9`→`*T`）读完按「块记录句柄 → 块实体名」重解析（`resolve_pending()`），实测 16 个样本的块参照全部落到真实块定义；②标注块名拿不到（样本里标注的块句柄是空句柄），绘制侧按"没被引用的 `*D` 块"整体补画，且只在数量对得上时才补（详见 [third-party.md](third-party.md)） |
 | 性能 | 2.7 MB / 5260 item 的整图约 **0.31 秒**；16 个真实 DWG 全部画得出来 |
 | 目录与图纸列表 | **打开目录**（`list_drawings()` 递归扫描，上限 500）：右侧「图纸」面板点一下就换；打开单张图则列出同目录的兄弟文件；`Ctrl+O`/`Ctrl+Shift+O`/拖图纸或目录都能开 |
 | 随手可用的示例 | `py/cadview_demo.py`：不给参数时弹一个**两个按钮**的选择框（选择文件… / 选择目录…，外加取消），选完就打开；无显示器时给提示与样例清单 |
 | 问题面板 | 窗口下方「问题（当前图纸）」：打开失败、没画出来的原因、推断（补画说明）、读取告警**全文**显示（状态栏只留一行摘要），带「复制这些问题」按钮 |
 | 逐张体检 | `moz-cadview <目录> --scan`：画得出/画不出/打不开 + 原因（不需要 Qt），用来定位"哪些图纸有问题、为什么" |
 | 导出与无窗口模式 | `--export-png` / `--export-svg` / `--report`（给目录则逐个打印）/ `--layers` / `--stats`（无显示器即可跑） |
-| 测试 | `py/tests/test_cadview.py` **46 个用例**（离散数学、颜色/线型、场景装配、块与标注展开、退化输入、大图性能、兜底读取、导出、命令行）、`py/tests/test_cadio.py` **34 个**（含上面两条修复的语料钉桩）；全套 `py/tests` **278 个** |
+| 测试 | `py/tests/test_cadview.py` **48 个用例**（离散数学、颜色/线型、场景装配、块与标注展开、退化输入、大图性能、兜底读取、导出、命令行）、`py/tests/test_cadio.py` **36 个**（含上面两条修复的语料钉桩）；全套 `py/tests` **282 个** |
 | 打包 | wheel 带 `moz_cadview.py` 与 `moz-cadview` 入口；`scripts/smoke_installed.py` 里 offscreen 画过一遍 |
 | 人眼核对 | 导出 PNG 看过：轮廓、4 个红孔、旋转的标注文字（"plateheight"/"bodywidth"）都在位 |
 
@@ -197,7 +198,8 @@ void          moz_cad_free(moz_cad_file *f);
 - **许可**：GPL 派生库的对外分发义务（与现状同类，非新增风险，但要在文档里说清）；
 - **上游在快速演进**：我们 vendored 的是 2.0.0（commit `25a2f8d`），它比 LibreCAD 树里的拷贝新得多——好处是覆盖面广，代价是**升级要跟**（上游还在加读取器与修 DWG 细节）。所以 C ABI 边界要留干净：driver 只依赖 `DRW_Interface`，换实现不动 Python 侧（实测：0.5.11 → 2.0.0 的迁移，driver 一行没改就编过）。
 - **DWG 的引用解析要"读完再解"**：块记录/块实体/实体的到达顺序不保证，上游是在实体到达那一刻查表，所以占位名（`*U`/`*T`）必须等整张图读完再按句柄重查（`resolve_pending()`）。这条是**实测踩出来的**（同一张图 11 个块参照全中招），凡是"名字/引用"类的补全都得走这个模式。
-- **标注块的补画是"命名约定 + 数量对得上"的启发式**：DWG 标注的块句柄上游不读（拿不到映射，只能这样），所以判据是 `*D` 前缀 + 「无名标注数 ≥ 没被引用的 `*D` 块数」；对不上就退回"只报告"。它不改动任何几何、只是把文件里本来就有的块画出来，所以错也只能错在"多画/少画标注图形"，不会挪动别的东西——面板里会写明这次补画了哪些块，便于人核对。
+- **标注块的补画是"命名约定 + 数量对得上"的启发式**：样本里标注的块句柄是空句柄（拿不到映射，只能这样），所以判据是 `*D` 前缀 + 「无名标注数 ≥ 没被引用的 `*D` 块数」；对不上就退回"只报告"。它不改动任何几何、只是把文件里本来就有的块画出来，所以错也只能错在"多画/少画标注图形"，不会挪动别的东西——面板里会写明这次补画了哪些块，便于人核对。
+- **"近似/占位"要和"完整几何"分开**：一个 `MOZ_CAD_FLAG_APPROX` 标志 + 一张理由表（`moz_cadio.APPROX_NOTES`），面板里进"推断"而不是"告警"。这样"画了但缺一块"（图片没像素、字形在 .shx 里）不会被误读成"没画出来"。
 
 ## 九、需要拍板的决策点
 
