@@ -106,9 +106,11 @@
       HELIX/IMAGE）也从"只报数量"变成**真画出来**——实测同一张样本里 15 个 MLEADER、3 个 MLINE、
       2 个 MESH 以前是静默丢掉的，语料里那张只有 MLEADER 的 DXF 以前整张判成空白。
 - [ ] **DWG 进"图纸 → 模型"（N3）**：`moz_dxf.Drawing` 从规范化实体模型构建，于是 DWG 也能走 P1。
-- [ ] **没有几何数据的实体 → 补上**：①MLEADER 的**引线折点**（上游 DWG 解析没给，只有文字/内容块，
-      所以画出来没有指向被标注物的那根引线）；②SURFACE/代理实体的几何；③SHAPE 的字形（要外部 .shx
-      解析器）、IMAGE 的像素（要读图片文件）、UNDERLAY 的外部 PDF/DGN/DWF 内容。
+- [ ] **没有几何数据的实体 → 补上**：①MLEADER 的**引线折点**（这几张 ACadSharp 样本把引线几何放在
+      `ROUNDTRIP_MLCONTEXT` 这种 round-trip 容器对象里，上游只认 `MLEADEROBJECTCONTEXTDATA` 这个
+      语义名，所以只有文字/内容块画出来了；同一张图的 DXF 版引线是好的）；②SURFACE/代理实体的几何；
+      ③SHAPE 的字形（要外部 .shx 解析器）、IMAGE 的像素（要读图片文件）、UNDERLAY 的外部
+      PDF/DGN/DWF 内容。
 - [ ] **模型空间的"无限长线"按视图裁**：RAY/XLINE 现在按图纸尺度放大 20 倍拉长（场景包围盒会被它们
       撑大，`Home`/适应视角时会显得空）。
 - [ ] **装配与运动**：间隙、配合、行程。

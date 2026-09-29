@@ -79,9 +79,13 @@
   - **外部参照的名字是后到的**：IMAGE/UNDERLAY 实体在读实体段时来、`IMAGEDEF`/`UNDERLAYDEFINITION`
     对象在对象段才到（上游注释也这么说），所以名字要**读完再解析**（跟块名同一套路），拿到后进
     `name`（面板里能看到具体的 .jpg/.pdf 文件名）。同理 MLINESTYLE 也要等读完。
-  - **MLEADER 的引线折点上游没给**：`DRW_MLeaderAnnotContext::roots` 是空的（实测 15/15 只有文字），
-    所以画的是文字+内容块、没有那根指向被标注物的引线；这是上游 DWG 解析的缺口，记在
-    `docs/roadmap.md`。
+  - **MLEADER 的引线折点上游不给**（实测 15/15 只有文字，`DRW_MLeaderAnnotContext::roots` 是空的）。
+    原因看文件里的类名就清楚了：这几张 ACadSharp 样本把 MLEADER 的上下文（引线几何）放在
+    **`ROUNDTRIP_MLCONTEXT`**（连同 `ACAD_ROUNDTRIP_2010_MLEADER`）里——即把 2010 才有的特性用
+    "round-trip 容器对象"塞进 R14/2000 格式的文件。上游能解的是 `MLEADEROBJECTCONTEXTDATA`
+    （`intern/dwgreader.cpp:2721` 按语义名匹配），这个名字它匹配不上，于是当普通对象放过。
+    同一张图的 **DXF** 版反而能给出引线（实测 3 个 MLEADER 各带 2–5 个折点，文字 "I am leader"），
+    所以是我们的绘制路径没问题、是 DWG 那份数据源缺。记在 `docs/roadmap.md`。
 - **还没画的**：SURFACE（曲面）与代理实体（上游不解其几何）——仍然**计数报出来**，不静默；
   SHAPE 的字形、IMAGE 的像素、PDF/DGN/DWF 底图内容都需要外部文件/字体，本层不解释（画占位并说明）。
 - 已知读不通的样本（都在 `py/verify_cadio.py` 的"预期读不通"清单里记名）：LibreCAD 树里的
