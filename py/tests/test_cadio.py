@@ -368,6 +368,22 @@ def test_hatch_spline_edges_are_sampled_like_spline_entities(cadio):
         "样条边已经采样了，不该再有'这截是空的'的通知"
 
 
+def test_dwg_sample_references_are_in_the_corpus(cadio):
+    r"""ACadSharp 样本引用的外部文件（image.JPG / pdf-definition.pdf）随语料抓齐了。
+
+    看图器靠它们载入真像素；`fetch_dwg_samples.py` 的 extras 列表按上游体积校验。
+    """
+    dwg_root = Path(__file__).resolve().parents[2] / "corpus" / "dwg"
+    image = dwg_root / "acadsharp" / "image.JPG"
+    pdf = dwg_root / "pdf-definition.pdf"
+    assert image.stat().st_size > 10_000, r"image.JPG 随语料分发（.\image.JPG 引用的就是它）"
+    assert pdf.stat().st_size > 10_000 and pdf.read_bytes()[:5] == b"%PDF-", \
+        r"pdf-definition.pdf 随语料分发（..\pdf-definition.pdf 引用的就是它）"
+    cad = cadio.read(str(dwg_root / "acadsharp" / "samples__sample_AC1015.dwg"))
+    image_entity, = cad.by_kind("IMAGE")
+    assert image_entity.name.lower().endswith("image.jpg")
+
+
 def test_r12_legacy_codepage_text_decodes(cadio):
     r"""R12 时代的 DXF **只有码页字节**（没有 $DWGCODEPAGE 也按 ANSI_1252 解），`\U+XXXX` 转义要全解。
 

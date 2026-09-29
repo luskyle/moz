@@ -363,6 +363,24 @@ def test_images_show_pixels_or_generated_placeholders(qt_app, tmp_path):
         f"载入的是真图片像素（强红或强绿）：#{pixel & 0xFFFFFF:06x}"
 
 
+def test_dwg_image_loads_real_pixels_from_the_corpus(qt_app):
+    """ACadSharp 样本的 IMAGE 引用语料里的 image.JPG —— 显示真照片、占位图说明消失。"""
+    import moz_cadview as cadview
+    from PySide6.QtWidgets import QGraphicsPixmapItem
+
+    path = DWGS / "acadsharp" / "samples__sample_AC1015.dwg"
+    if not path.exists():
+        pytest.skip("DWG 语料缺失")
+    scene, _per, _counts, _missing, notes = cadview.build_scene(cadview.load(str(path)))
+    assert not any("IMAGE 用了占位图" in note for note in notes), notes
+    pixmaps = [item for item in scene.items() if isinstance(item, QGraphicsPixmapItem)]
+    assert pixmaps
+    image = pixmaps[0].pixmap().toImage()
+    colors = {image.pixel(x, y) & 0xFFFFFF
+              for x in range(0, image.width(), 7) for y in range(0, image.height(), 7)}
+    assert len(colors) > 100, f"载入的是真照片，不是占位图（颜色 {len(colors)} 种）"
+
+
 def test_mouse_drag_pans_the_view(qt_app):
     """看图区**左键按住拖动 ≡ 内容跟手**（1:1，放大后也一样跟）。
 

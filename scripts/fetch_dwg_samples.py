@@ -39,6 +39,13 @@ SOURCES = [
             "samples/dynamic-blocks/BLOCKVISIBILITYPARAMETER.dwg",
             "samples/geolocation/geoloc.dwg",
         ],
+        # 样本里引用的外部文件（看图器要能载入真像素/拿到文件）：
+        #   .\image.JPG          → acadsharp/image.JPG（与图同目录，实体里是相对名）
+        #   ..\pdf-definition.pdf → 语料根下 pdf-definition.pdf（底图参照的字符串是"上一级目录"）
+        "extras": [
+            ("samples/image.JPG", "acadsharp/image.JPG", 92061),
+            ("samples/pdf-definition.pdf", "pdf-definition.pdf", 62570),
+        ],
     },
     {
         "repo": "LibreCAD/libdxfrw", "ref": "master", "license": "GPLv2-or-later", "dest": "libdxfrw",
@@ -140,6 +147,32 @@ def main(argv=None):
                 else:
                     print(f"  失败 {path}：{detail}", flush=True)
                     failed.append(path)
+
+        # extras（样本引用的外部文件：图片/PDF 等）：落点在 extras 里写死（相对 DEST_ROOT），
+        # 体积按仓库树核对（半截文件重下；上游没有的会显式报失败，不把 404 当文件）
+        for repo_path, rel, want in source.get("extras", []):
+            target = os.path.join(DEST_ROOT, rel)
+            if not want:
+                if os.path.exists(target):
+                    print(f"  上游没有 {repo_path}，删掉误存的 {rel}", file=sys.stderr)
+                    os.remove(target)
+                continue
+            if os.path.exists(target) and os.path.getsize(target) == want:
+                continue
+            if args.dry_run:
+                print(f"  会抓 {repo_path} -> {rel}")
+                continue
+            url = f"https://raw.githubusercontent.com/{repo}/{ref}/{repo_path}"
+            ok, detail = curl(url, target)
+            if ok and os.path.getsize(target) == want:
+                print(f"  {os.path.basename(target):58s} {os.path.getsize(target):8d} B",
+                      flush=True)
+                total += 1
+            else:
+                size = os.path.getsize(target) if os.path.exists(target) else 0
+                print(f"  失败 {repo_path}：{detail}（体积 {size}，应为 {want}）",
+                      file=sys.stderr)
+                failed.append(repo_path)
     print(f"\n新抓取 {total} 个文件 -> {os.path.relpath(DEST_ROOT, ROOT)}")
     if failed:
         print("失败项：", ", ".join(failed[:8]), file=sys.stderr)
