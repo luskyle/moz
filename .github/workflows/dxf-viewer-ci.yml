@@ -58,6 +58,8 @@ jobs:
           $env:PYTHONPATH = Join-Path $PWD 'py'
           $env:MOZ_CADIO_LIB = Join-Path $PWD 'build\lib\mozcadio.dll'
           $env:PYTHONUTF8 = '1'
+          python --version
+          Write-Output ("lib exists: " + (Test-Path $env:MOZ_CADIO_LIB))
           python -m moz_cadview 'corpus/dxf/three-dxf/sample__data__demo.dxf' --model-json 'model.json'
           python -c "import json; d=json.load(open('model.json')); assert d['items'] and d['layers']; print('smoke OK:', len(d['layers']), 'layers,', len(d['items']), 'items (mozcadio.dll)')"
       - name: Smoke the platform library, Unix leg
