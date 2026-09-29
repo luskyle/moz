@@ -26,7 +26,7 @@
 从仓库 GitHub Releases（标签 `vscode-dxf-viewer-v*`）或 CI 产物下载 vsix 文件，然后：
 
 ```bash
-code --install-extension moz-dxf-viewer-0.2.1.vsix
+code --install-extension moz-dxf-viewer-0.2.2.vsix
 ```
 
 装完**立刻能用**，机器上只需一个 Python 3.8+（默认找 `python3`，Windows 可在设置里
